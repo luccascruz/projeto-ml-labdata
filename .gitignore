@@ -1,6 +1,6 @@
 # CSV e pkl
-.CSV
-.pkl
+*.csv
+*.pkl
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
