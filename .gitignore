@@ -1,3 +1,7 @@
+# CSV e pkl
+.CSV
+.pkl
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
