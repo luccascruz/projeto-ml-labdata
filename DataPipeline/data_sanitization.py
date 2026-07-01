@@ -79,8 +79,10 @@ def sanitize_previous_app(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
 def run_sanitization(cfg: dict | None = None) -> None:
     cfg = cfg or load_config()
 
-    data_dir = PROJECT_ROOT / cfg["paths"]["data_dir"]
-    data_dir.mkdir(parents=True, exist_ok=True)
+    raw_dir = PROJECT_ROOT / cfg["paths"]["raw_dir"]
+    clean_dir = PROJECT_ROOT / cfg["paths"]["clean_dir"]
+
+    clean_dir.mkdir(parents=True, exist_ok=True)
 
     raw_files = cfg["data"]["raw_files"]
     clean_files = cfg["data"]["clean_files"]
@@ -93,12 +95,12 @@ def run_sanitization(cfg: dict | None = None) -> None:
     ]
 
     for raw_name, clean_name, clean_func in tasks:
-        input_path = data_dir / raw_name
+        input_path = raw_dir / raw_name
         if input_path.exists():
             print(f"--- Sanitizando: {raw_name} ---")
             df = pd.read_csv(input_path)
             df_clean = clean_func(df, cfg)
-            output_path = data_dir / clean_name
+            output_path = clean_dir / clean_name
             df_clean.to_csv(output_path, index=False)
             print(f"Salvo em: {output_path}")
         else:

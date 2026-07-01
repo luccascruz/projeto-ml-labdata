@@ -17,7 +17,9 @@ project:
 
 # --- Caminhos (relativos à raiz do projeto) ---------------------------------
 paths:
-  data_dir: Dados           # estrutura exigida: artefatos direto em /Dados (flat)
+  raw_dir: Dados/raw
+  clean_dir: Dados/clean
+  abt_dir: Dados/abt
 
 # --- Artefatos de dados ------------------------------------------------------
 # Brutos: nomes originais do Kaggle (base é multi-tabela).
