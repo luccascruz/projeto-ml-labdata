@@ -78,9 +78,7 @@ def clean_dataframe(df:pd.DataFrame) -> pd.DataFrame:
 
 
 def sanitize_application(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Limpeza da tabela principal (application_train)
-    """
+    """Limpeza da tabela principal (application_train)"""
     # Corrige valor sentinela utilizado para representar ausência de informação
     df["DAYS_EMPLOYED"] = (
         df["DAYS_EMPLOYED"]
@@ -95,11 +93,48 @@ def sanitize_application(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
+
 def sanitize_bureau(df: pd.DataFrame) -> pd.DataFrame:
-    
+    """
+    Sanitiza a tabela bureau.
+
+    Operações realizadas:
+        - Substitui valores monetários negativos por NA
+        - Substitui contagens negativas de prorrogação por NA
+        - Substitui datas futuras (dias positivos) por NA
+    """
+
+    # Valores monetários não podem ser negativos
+    monetary_cols = [
+        "AMT_CREDIT_SUM",
+        "AMT_CREDIT_SUM_DEBT",
+        "AMT_CREDIT_SUM_LIMIT",
+        "AMT_CREDIT_SUM_OVERDUE",
+    ]
+
+    for col in monetary_cols:
+        if col in df.columns:
+            df.loc[df[col] < 0, col] = pd.NA
+
+    # Quantidade de prorrogações não pode ser negativa
+    if "CNT_CREDIT_PROLONG" in df.columns:
+        df.loc[df["CNT_CREDIT_PROLONG"] < 0, "CNT_CREDIT_PROLONG"] = pd.NA
+
+    # Datas em bureau representam dias relativos ao momento da aplicação.
+    # Valores positivos indicariam eventos futuros.
+    day_cols = [
+        "DAYS_CREDIT",
+        "DAYS_ENDDATE_FACT",
+        "DAYS_CREDIT_UPDATE",
+    ]
+
+    for col in day_cols:
+        if col in df.columns:
+            df.loc[df[col] > 0, col] = pd.NA
+
     return df
 
-def sanitize_previousapp(df: pd.DataFrame) -> pd.DataFrame:
+def sanitize_previous_app(df: pd.DataFrame) -> pd.DataFrame:
     
     return df
 
