@@ -41,6 +41,11 @@ def train_model(cfg: dict | None = None) -> None:
     print("--- Iniciando Pipeline com ABT Finalizada ---")
     df = pd.read_csv(data_file)
 
+    #Atualização em 01/07, criando pasta antes para não sobescrever na persistência do modelo
+    model_name = mcfg["name"]
+    model_dir = PROJECT_ROOT / cfg["paths"]["model_dir"] / model_name
+    model_dir.mkdir(parents=True, exist_ok=True)
+
     # 1. Mantém apenas colunas numéricas + o target
     y = df[target]
     df = df.select_dtypes(include=["number"]).drop(columns=[target], errors="ignore")
@@ -57,7 +62,6 @@ def train_model(cfg: dict | None = None) -> None:
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=mcfg["test_size"], random_state=seed
     )
-
     # 3. Seleção de variáveis por importância (configurável)
     fs = mcfg["feature_selection"]
     if fs["enabled"]:
@@ -73,6 +77,11 @@ def train_model(cfg: dict | None = None) -> None:
         print(f"Features selecionadas para treino: {top_features}")
     else:
         top_features = X_train.columns.tolist()
+
+    # 3.1 Salva conjunto de teste (X_test, y_test) para avaliação futura do modelo em evaluation.ipynb
+    X_test.to_csv(model_dir / "X_test.csv", index=False)
+    y_test.to_csv(model_dir / "y_test.csv", index=False)
+
 
     # 4. Balanceamento (configurável: smote | class_weight | none)
     balancing = mcfg["balancing"]
@@ -105,8 +114,6 @@ def train_model(cfg: dict | None = None) -> None:
     print(classification_report(y_test, y_pred))
 
     # 6. Persistência do modelo no diretório configurado
-    model_dir = PROJECT_ROOT / cfg["paths"]["model_dir"]
-    model_dir.mkdir(parents=True, exist_ok=True)
     model_path = model_dir / mcfg["filename"]
     joblib.dump(model, model_path)
     print(f"Modelo salvo em: {model_path}")
