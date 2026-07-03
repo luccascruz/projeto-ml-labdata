@@ -24,7 +24,7 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
 
 def optimize_dtypes(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Otimiza os tipos de dados para reduzir o consumo de memória.
+    Otimiza os tipos de dados para reduzir o consumo de memória. Útil para transformações para .parquet.
 
     Operações realizadas:
         - float64 -> float32
