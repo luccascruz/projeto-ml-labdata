@@ -30,7 +30,7 @@ data:
     bureau: bureau.csv
     previous_application: previous_application.csv
   clean_files:
-    application: clean_data.csv                  # tabela principal limpa (canônico)
+    application: clean_application_train.csv                  # tabela principal limpa (canônico)
     bureau: clean_bureau.csv                      # intermediário p/ a ABT
     previous_application: clean_previous_application.csv
   abt_file: abt.csv                               # ABT final (canônico)
