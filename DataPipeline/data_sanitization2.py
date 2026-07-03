@@ -134,8 +134,46 @@ def sanitize_bureau(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
-def sanitize_previous_app(df: pd.DataFrame) -> pd.DataFrame:
-    
+def sanitize_previous_application(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Sanitiza a tabela previous_application.
+
+    Operações realizadas:
+        - Substitui o valor sentinela (365243) por NA nas colunas de dias
+        - Substitui valores monetários negativos por NA
+        - Substitui quantidade negativa de parcelas por NA
+    """
+
+    # Valor sentinela 365243 utilizado para representar ausência de informação
+    day_cols = [
+        "DAYS_FIRST_DRAWING",
+        "DAYS_FIRST_DUE",
+        "DAYS_LAST_DUE_1ST_VERSION",
+        "DAYS_LAST_DUE",
+        "DAYS_TERMINATION",
+    ]
+
+    for col in day_cols:
+        if col in df.columns:
+            df[col] = df[col].replace(365243, pd.NA)
+
+    # Valores monetários não podem ser negativos
+    monetary_cols = [
+        "AMT_ANNUITY",
+        "AMT_APPLICATION",
+        "AMT_CREDIT",
+        "AMT_DOWN_PAYMENT",
+        "AMT_GOODS_PRICE",
+    ]
+
+    for col in monetary_cols:
+        if col in df.columns:
+            df.loc[df[col] < 0, col] = pd.NA
+
+    # Número de parcelas não pode ser negativo
+    if "CNT_PAYMENT" in df.columns:
+        df.loc[df["CNT_PAYMENT"] < 0, "CNT_PAYMENT"] = pd.NA
+
     return df
 
 
