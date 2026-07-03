@@ -178,6 +178,17 @@ def sanitize_previous_application(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def run_sanitization(cfg: dict | None = None) -> None:
+    """
+    Executa a sanitização de todas as tabelas brutas.
+
+    Pipeline:
+        1. Carrega o arquivo bruto
+        2. Executa limpeza genérica
+        3. Executa sanitização específica da tabela
+        4. Otimiza tipos de dados
+        5. Salva o resultado
+    """
+
     cfg = cfg or load_config()
 
     raw_dir = PROJECT_ROOT / cfg["paths"]["raw_dir"]
@@ -188,24 +199,37 @@ def run_sanitization(cfg: dict | None = None) -> None:
     raw_files = cfg["data"]["raw_files"]
     clean_files = cfg["data"]["clean_files"]
 
-    # Mapeamento: (arquivo bruto, arquivo limpo, função de limpeza)
-    tasks = [
-        (raw_files["application"], clean_files["application"], sanitize_application),
-        (raw_files["bureau"], clean_files["bureau"], sanitize_bureau),
-        (raw_files["previous_application"], clean_files["previous_application"], sanitize_previous_app),
-    ]
+    tasks = {
+        "application": sanitize_application,
+        "bureau": sanitize_bureau,
+        "previous_application": sanitize_previous_application,
+    }
 
-    for raw_name, clean_name, clean_func in tasks:
-        input_path = raw_dir / raw_name
-        if input_path.exists():
-            print(f"--- Sanitizando: {raw_name} ---")
-            df = pd.read_csv(input_path)
-            df_clean = clean_func(df, cfg)
-            output_path = clean_dir / clean_name
-            df_clean.to_csv(output_path, index=False)
-            print(f"Salvo em: {output_path}")
-        else:
+    for dataset, sanitize_func in tasks.items():
+
+        input_path = raw_dir / raw_files[dataset]
+        output_path = clean_dir / clean_files[dataset]
+
+        if not input_path.exists():
             print(f"Arquivo não encontrado: {input_path}")
+            continue
+
+        print(f"\n--- Sanitizando {dataset} ---")
+
+        df = pd.read_csv(input_path)
+
+        # Limpeza genérica
+        df = clean_dataframe(df)
+        
+        # Regras específicas da tabela
+        df = sanitize_func(df)
+
+        # Otimização de memória
+        df = optimize_dtypes(df)
+
+        df.to_csv(output_path, index=False)
+
+        print(f"Salvo em: {output_path}")
 
 
 if __name__ == "__main__":
