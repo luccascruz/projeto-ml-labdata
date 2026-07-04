@@ -1,6 +1,7 @@
-# CSV e pkl
+# Arquivos de dados
 *.csv
 *.pkl
+*.parquet
 
 # Artefatos gerados pelo treino (modelo + graficos)
 Model/artifacts/
