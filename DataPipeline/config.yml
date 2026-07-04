@@ -23,17 +23,17 @@ paths:
 
 # --- Artefatos de dados ------------------------------------------------------
 # Brutos: nomes originais do Kaggle (base é multi-tabela).
-# Limpos/ABT: nomes canônicos pedidos pela professora (clean_data.csv, abt.csv).
+# Limpos/ABT: nomes originais mantidos com formato .parquet
 data:
   raw_files:
     application: application_train.csv
     bureau: bureau.csv
     previous_application: previous_application.csv
   clean_files:
-    application: clean_application_train.csv                  # tabela principal limpa (canônico)
-    bureau: clean_bureau.csv                      # intermediário p/ a ABT
-    previous_application: clean_previous_application.csv
-  abt_file: abt.csv                               # ABT final (canônico)
+    application: application_train.parquet                # tabela principal limpa
+    bureau: bureau.parquet                      
+    previous_application: previous_application.parquet
+  abt_file: abt.csv                              
 
 # --- Sanitização (raw -> clean) ---------------------------------------------
 sanitization:

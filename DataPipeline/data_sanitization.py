@@ -228,7 +228,7 @@ def run_sanitization(cfg: dict | None = None) -> None:
         # Otimização de memória
         df = optimize_dtypes(df)
 
-        df.to_csv(output_path, index=False)
+        df.to_parquet(output_path, index=False)
 
         print(f"Salvo em: {output_path}")
 
