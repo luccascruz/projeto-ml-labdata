@@ -15,17 +15,23 @@ project:
   target: TARGET            # variável alvo (compartilhada com o pipeline de dados)
   random_state: 42
 
-# --- Entrada (onde está a ABT) ----------------------------------------------
+# --- Entrada (ABT) — nome do arquivo dentro do bucket `abt` ------------------
 data:
-  data_dir: Dados
   abt_file: abt.csv
 
-# --- Saída (modelo treinado + gráficos) -------------------------------------
-paths:
-  model_dir: Model/artifacts
+# --- Storage (MinIO / S3) — I/O do pipeline é toda aqui ----------------------
+# Só as camadas que train.py usa (entrada=abt, saída=models). `raw`/`clean` são
+# do domínio de DataPipeline/config.yml — não duplicados aqui.
+# Endpoint e credenciais vêm de env (MINIO_ENDPOINT, AWS_ACCESS_KEY_ID,
+# AWS_SECRET_ACCESS_KEY), NUNCA deste arquivo.
+storage:
+  buckets:
+    abt: abt
+    models: models
 
 # --- Modelagem (abt -> modelo) ----------------------------------------------
 model:
+  name: modelo_risco_credito           # subpasta dos artefatos no bucket `models`
   filename: modelo_risco_credito.pkl
   test_size: 0.2
   feature_selection:

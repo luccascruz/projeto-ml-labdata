@@ -32,12 +32,30 @@ e coloque os CSVs **brutos** na pasta `Dados/`:
 
 ### 3. Pipeline (do dado bruto ao modelo)
 
-Execute a partir da raiz do projeto, nesta ordem:
+O pipeline lê e grava **no MinIO (S3)**, não em arquivos locais. A forma
+recomendada de rodar de ponta a ponta é via Docker, que sobe MinIO + Airflow e
+orquestra `raw → clean → abt → train` — veja **[Rodar via Docker](#rodar-via-docker-infra-mlops)**.
+
+Os estágios continuam sendo scripts `.py` chamáveis
+(`DataPipeline/data_sanitization.py`, `DataPipeline/abt_transform.py`,
+`Model/train.py`); rodá-los diretamente exige as variáveis de ambiente do MinIO
+(`MINIO_ENDPOINT`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) apontando para uma
+instância acessível.
+
+Os parâmetros (buckets, colunas, hiperparâmetros, threshold) ficam nos arquivos de
+configuração `DataPipeline/config.yml` e `Model/config.yml` — não é preciso editar os scripts.
+
+## Rodar via Docker (infra MLOps)
+
+Via reproduzível (Linux/macOS/Windows) que sobe MinIO + Airflow e roda o pipeline
+`raw → clean → abt → train` orquestrado:
+
 ```bash
-python DataPipeline/data_sanitization.py   # raw -> Dados/clean_data.csv (+ auxiliares)
-python DataPipeline/abt_transform.py       # clean -> Dados/abt.csv
-python Model/train.py                       # abt -> Model/artifacts/modelo_risco_credito.pkl
+cp .env.example .env
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  # cole em AIRFLOW_FERNET_KEY
+docker compose up -d --build
 ```
 
-Os parâmetros (caminhos, colunas, hiperparâmetros, threshold) ficam nos arquivos de
-configuração `DataPipeline/config.yml` e `Model/config.yml` — não é preciso editar os scripts.
+- MinIO: <http://localhost:9001> · Airflow: <http://localhost:8080>
+- O `seeder` carrega `Dados/*.csv` no bucket `raw`; dispare o DAG
+  `home_credit_pipeline` no Airflow. Detalhes em [MLOps/README.md](MLOps/README.md).

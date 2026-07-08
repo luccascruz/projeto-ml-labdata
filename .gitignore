@@ -224,3 +224,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Docs internos do fluxo de brainstorming (nao versionar)
+docs/superpowers/

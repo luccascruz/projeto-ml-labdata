@@ -9,3 +9,4 @@ seaborn
 imbalanced-learn
 ipywidgets
 pyyaml
+s3fs
