@@ -16,10 +16,22 @@ project:
   random_state: 42
 
 # --- Caminhos (relativos à raiz do projeto) ---------------------------------
+# Legado (EDA/notebooks). O PIPELINE não usa mais estes paths: a I/O é toda no
+# MinIO (ver bloco `storage` abaixo).
 paths:
   raw_dir: Dados/raw
   clean_dir: Dados/clean
   abt_dir: Dados/abt
+
+# --- Storage (MinIO / S3) — I/O do pipeline é toda aqui ----------------------
+# Nomes dos buckets. Endpoint e credenciais vêm de env (MINIO_ENDPOINT,
+# AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY), NUNCA deste arquivo.
+storage:
+  buckets:
+    raw: raw
+    clean: clean
+    abt: abt
+    models: models
 
 # --- Artefatos de dados ------------------------------------------------------
 # Brutos: nomes originais do Kaggle (base é multi-tabela).
