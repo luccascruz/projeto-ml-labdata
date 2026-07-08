@@ -1,11 +1,12 @@
 """Treino do modelo de risco de crédito (abt -> modelo).
 
 Lê o config próprio de /Model (Model/config.yml): hiperparâmetros, seleção de
-variáveis, estratégia de balanceamento, threshold e caminhos — nada chumbado.
-Caminhos resolvidos relativos à raiz do projeto (portável). Lê a ABT de
-/Dados/abt.csv. Métrica oficial reportada: ROC AUC.
+variáveis, estratégia de balanceamento, threshold e buckets — nada chumbado.
+Lê a ABT do bucket `abt` (MinIO/S3) e salva `.pkl`/artefatos no bucket `models`
+via storage.py. Métrica oficial reportada: ROC AUC.
 """
 
+import sys
 import pandas as pd
 import joblib
 import matplotlib
@@ -22,6 +23,10 @@ from imblearn.over_sampling import SMOTE
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_ROOT / "Model" / "config.yml"
 
+# storage.py fica na raiz do projeto: garante o import ao rodar como script
+sys.path.insert(0, str(PROJECT_ROOT))
+from storage import get_storage
+
 
 def load_config(path: Path = CONFIG_PATH) -> dict:
     with open(path, encoding="utf-8") as f:
@@ -35,16 +40,15 @@ def train_model(cfg: dict | None = None) -> None:
     seed = cfg["project"]["random_state"]
     mcfg = cfg["model"]
 
-    data_dir = PROJECT_ROOT / cfg["data"]["data_dir"]
-    data_file = data_dir / cfg["data"]["abt_file"]
+    store = get_storage(cfg)
+    kw = store.io_kwargs()
 
     print("--- Iniciando Pipeline com ABT Finalizada ---")
-    df = pd.read_csv(data_file)
+    df = pd.read_csv(store.path("abt", cfg["data"]["abt_file"]), **kw)
 
-    #Atualização em 01/07, criando pasta antes para não sobescrever na persistência do modelo
+    # Artefatos do modelo vão para o bucket `models`, sob a subpasta do modelo
     model_name = mcfg["name"]
-    model_dir = PROJECT_ROOT / cfg["paths"]["model_dir"] / model_name
-    model_dir.mkdir(parents=True, exist_ok=True)
+    prefix = f"{model_name}/"
 
     # 1. Mantém apenas colunas numéricas + o target
     y = df[target]
@@ -78,9 +82,9 @@ def train_model(cfg: dict | None = None) -> None:
     else:
         top_features = X_train.columns.tolist()
 
-    # 3.1 Salva conjunto de teste (X_test, y_test) para avaliação futura do modelo em evaluation.ipynb
-    X_test.to_csv(model_dir / "X_test.csv", index=False)
-    y_test.to_csv(model_dir / "y_test.csv", index=False)
+    # 3.1 Salva conjunto de teste (X_test, y_test) no bucket `models` p/ avaliação futura
+    X_test.to_csv(store.path("models", prefix + "X_test.csv"), index=False, **kw)
+    y_test.to_csv(store.path("models", prefix + "y_test.csv"), index=False, **kw)
 
 
     # 4. Balanceamento (configurável: smote | class_weight | none)
@@ -113,18 +117,20 @@ def train_model(cfg: dict | None = None) -> None:
     print(f"Threshold aplicado: {threshold}")
     print(classification_report(y_test, y_pred))
 
-    # 6. Persistência do modelo no diretório configurado
-    model_path = model_dir / mcfg["filename"]
-    joblib.dump(model, model_path)
-    print(f"Modelo salvo em: {model_path}")
+    # 6. Persistência do modelo no bucket `models`
+    model_ref = store.path("models", prefix + mcfg["filename"])
+    with store.open("models", prefix + mcfg["filename"], "wb") as fh:
+        joblib.dump(model, fh)
+    print(f"Modelo salvo em: {model_ref}")
 
     # 7. Importância das variáveis do modelo final
-    fig_path = model_dir / "feature_importance_final.png"
+    fig_ref = store.path("models", prefix + "feature_importance_final.png")
     pd.Series(model.feature_importances_, index=top_features).nlargest(10).plot(kind="barh")
     plt.title("Top 10 Variáveis (após merge Bureau + PrevApp)")
     plt.tight_layout()
-    plt.savefig(fig_path)
-    print(f"Gráfico salvo em: {fig_path}")
+    with store.open("models", prefix + "feature_importance_final.png", "wb") as fh:
+        plt.savefig(fh, format="png")
+    print(f"Gráfico salvo em: {fig_ref}")
 
 
 if __name__ == "__main__":

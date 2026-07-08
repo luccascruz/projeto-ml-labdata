@@ -1,12 +1,12 @@
 """Sanitização dos dados brutos (raw -> clean).
 
-Todos os parâmetros (caminhos, nomes de arquivo, estratégias de imputação,
-limites de nulos, valor alvo) vêm do config.yml — nada é chumbado aqui.
-Os caminhos são resolvidos relativos à raiz do projeto via pathlib, de forma
-portável entre Linux, macOS e Windows. Saídas gravadas direto em /Dados (flat),
-seguindo a estrutura de entrega.
+Todos os parâmetros (nomes de arquivo, estratégias de imputação, limites de
+nulos, valor alvo, buckets) vêm do config.yml — nada é chumbado aqui. A I/O é
+toda no MinIO (S3) via storage.py: lê do bucket `raw`, grava parquet no bucket
+`clean`. Portável entre Linux, macOS e Windows.
 """
 
+import sys
 import pandas as pd
 from pathlib import Path
 import yaml
@@ -14,6 +14,10 @@ import yaml
 # Raiz do projeto = pasta-pai de DataPipeline/ (este arquivo vive em DataPipeline/)
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_ROOT / "DataPipeline" / "config.yml"
+
+# storage.py fica na raiz do projeto: garante o import ao rodar como script
+sys.path.insert(0, str(PROJECT_ROOT))
+from storage import get_storage
 
 
 def load_config(path: Path = CONFIG_PATH) -> dict:
@@ -191,14 +195,11 @@ def run_sanitization(cfg: dict | None = None) -> None:
     """
 
     cfg = cfg or load_config()
-
-    raw_dir = PROJECT_ROOT / cfg["paths"]["raw_dir"]
-    clean_dir = PROJECT_ROOT / cfg["paths"]["clean_dir"]
-
-    clean_dir.mkdir(parents=True, exist_ok=True)
+    store = get_storage(cfg)
 
     raw_files = cfg["data"]["raw_files"]
     clean_files = cfg["data"]["clean_files"]
+    kw = store.io_kwargs()
 
     tasks = {
         "application": sanitize_application,
@@ -208,16 +209,13 @@ def run_sanitization(cfg: dict | None = None) -> None:
 
     for dataset, sanitize_func in tasks.items():
 
-        input_path = raw_dir / raw_files[dataset]
-        output_path = clean_dir / clean_files[dataset]
-
-        if not input_path.exists():
-            print(f"Arquivo não encontrado: {input_path}")
-            continue
+        input_ref = store.path("raw", raw_files[dataset])
+        output_ref = store.path("clean", clean_files[dataset])
 
         print(f"\n--- Sanitizando {dataset} ---")
 
-        df = pd.read_csv(input_path)
+        # Lê o bruto do bucket `raw` (erro explícito se faltar — pipeline orquestrado)
+        df = pd.read_csv(input_ref, **kw)
 
         # Limpeza genérica
         df = clean_dataframe(df)
@@ -228,9 +226,10 @@ def run_sanitization(cfg: dict | None = None) -> None:
         # Otimização de memória
         df = optimize_dtypes(df)
 
-        df.to_parquet(output_path, index=False)
+        # Grava o limpo (parquet) no bucket `clean`
+        df.to_parquet(output_ref, index=False, **kw)
 
-        print(f"Salvo em: {output_path}")
+        print(f"Salvo em: {output_ref}")
 
 
 if __name__ == "__main__":

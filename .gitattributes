@@ -1,0 +1,8 @@
+# Normaliza fim de linha para LF e UTF-8 (portavel Linux/macOS/Windows).
+* text=auto eol=lf
+
+# Artefatos de dados/modelo sao binarios: Git nao deve converter EOL.
+*.csv binary
+*.pkl binary
+*.parquet binary
+*.png binary
