@@ -45,7 +45,9 @@ data:
     application: application_train.parquet                # tabela principal limpa
     bureau: bureau.parquet                      
     previous_application: previous_application.parquet
-  abt_file: abt.csv                              
+  abt_files: 
+    train: abt_train.parquet                              
+    val: val_data.parquet                                
 
 # --- Sanitização (raw -> clean) ---------------------------------------------
 sanitization:
