@@ -142,32 +142,53 @@ def build_bureau_features(bureau: pd.DataFrame) -> pd.DataFrame:
 
     bureau = bureau.copy()
 
+    # Flags auxiliares
+    bureau["IS_ACTIVE"] = bureau["CREDIT_ACTIVE"].eq("Active").astype("int8")
+    bureau["IS_CLOSED"] = bureau["CREDIT_ACTIVE"].eq("Closed").astype("int8")
+    bureau["HAS_OVERDUE"] = (
+        bureau["AMT_CREDIT_SUM_OVERDUE"]
+        .fillna(0)
+        .gt(0)
+        .astype("int8")
+    )
+
+    # Dívida apenas de contratos ativos
+    bureau["ACTIVE_DEBT_VALUE"] = (
+        bureau["AMT_CREDIT_SUM_DEBT"]
+        .where(bureau["IS_ACTIVE"] == 1, 0)
+    )
+
     bureau_features = (
         bureau
         .groupby("SK_ID_CURR")
         .agg(
             BUREAU_LOAN_COUNT=("SK_ID_BUREAU", "count"),
+
             TOTAL_CREDIT=("AMT_CREDIT_SUM", "sum"),
+
             TOTAL_DEBT=("AMT_CREDIT_SUM_DEBT", "sum"),
             MEAN_DEBT=("AMT_CREDIT_SUM_DEBT", "mean"),
             MAX_DEBT=("AMT_CREDIT_SUM_DEBT", "max"),
+
+            ACTIVE_DEBT=("ACTIVE_DEBT_VALUE", "sum"),
+
             TOTAL_OVERDUE=("AMT_CREDIT_SUM_OVERDUE", "sum"),
             MEAN_OVERDUE=("AMT_CREDIT_SUM_OVERDUE", "mean"),
+
             MEAN_DAYS_CREDIT=("DAYS_CREDIT", "mean"),
             LAST_CREDIT=("DAYS_CREDIT", "max"),
+
             CREDIT_TYPES=("CREDIT_TYPE", "nunique"),
+
+            ACTIVE_LOANS=("IS_ACTIVE", "sum"),
+            CLOSED_LOANS=("IS_CLOSED", "sum"),
+
+            ACTIVE_LOAN_RATE=("IS_ACTIVE", "mean"),
+            OVERDUE_RATE=("HAS_OVERDUE", "mean"),
         )
+        .reset_index()
     )
 
-    active_rate = (
-        bureau
-        .assign(ACTIVE=bureau["CREDIT_ACTIVE"].eq("Active"))
-        .groupby("SK_ID_CURR")["ACTIVE"]
-        .mean()
-        .rename("ACTIVE_LOAN_RATE")
-    )
-
-    bureau_features = bureau_features.join(active_rate).reset_index()
 
     return bureau_features
 
@@ -250,6 +271,14 @@ def prepare_model_data(
 
     train[numeric_cols] = train[numeric_cols].fillna(medianas_treino)
     validation[numeric_cols] = validation[numeric_cols].fillna(medianas_treino)
+
+    # Remove features com somente 1 valor única
+    X_train = train.drop(columns=[target])
+
+    constant_cols = X_train.columns[X_train.nunique() <= 1]
+
+    train = train.drop(columns=constant_cols)
+    validation = validation.drop(columns=constant_cols)
 
     # Fallback: se alguma coluna do treino for 100% nula, a mediana também
     # sai NaN — nesse caso extremo, preenche com 0 pra garantir que nenhum
