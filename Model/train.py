@@ -1,137 +1,118 @@
-"""Treino do modelo de risco de crédito (abt -> modelo).
-
-Lê o config próprio de /Model (Model/config.yml): hiperparâmetros, seleção de
-variáveis, estratégia de balanceamento, threshold e buckets — nada chumbado.
-Lê a ABT do bucket `abt` (MinIO/S3) e salva `.pkl`/artefatos no bucket `models`
-via storage.py. Métrica oficial reportada: ROC AUC.
-"""
-
 import sys
 import pandas as pd
 import joblib
+import numpy as np
+import xgboost as xgb
+import yaml
 import matplotlib
-matplotlib.use("Agg")  # backend sem display: funciona em servidor/headless (Docker)
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from pathlib import Path
-import yaml
-from sklearn.model_selection import train_test_split
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report, roc_auc_score
-from imblearn.over_sampling import SMOTE
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.impute import SimpleImputer
+from sklearn.compose import ColumnTransformer, make_column_selector
+from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import roc_curve
 
-# Raiz do projeto = pasta-pai de Model/ (este arquivo vive em Model/)
+# --- CLASSE DE FEATURE ENGINEERING ---
+class FeatureEngineering(BaseEstimator, TransformerMixin):
+    def fit(self, X, y=None): return self
+    def transform(self, X):
+        X = X.copy()
+        for col in ['AMT_CREDIT_SUM_DEBT', 'AMT_INCOME_TOTAL', 'BUREAU_LOAN_COUNT']:
+            X[col] = pd.to_numeric(X[col], errors='coerce')
+        X['DTI_RATIO'] = X['AMT_CREDIT_SUM_DEBT'] / X['AMT_INCOME_TOTAL'].replace(0, np.nan)
+        X['AVG_DEBT_PER_LOAN'] = X['AMT_CREDIT_SUM_DEBT'] / X['BUREAU_LOAN_COUNT'].replace(0, np.nan)
+        return X.replace([np.inf, -np.inf], np.nan)
+
+# --- CONFIGURAÇÃO ---
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CONFIG_PATH = PROJECT_ROOT / "Model" / "config.yml"
-
-# storage.py fica na raiz do projeto: garante o import ao rodar como script
 sys.path.insert(0, str(PROJECT_ROOT))
 from storage import get_storage
 
+def save_feature_importance(model, feature_names, store, nome):
+    est = model.named_steps['model']
+    if hasattr(est, 'feature_importances_'):
+        importances = est.feature_importances_
+    elif hasattr(est, 'coef_'):
+        importances = np.abs(est.coef_[0])
+    else: return
 
-def load_config(path: Path = CONFIG_PATH) -> dict:
-    with open(path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-
-def train_model(cfg: dict | None = None) -> None:
-    cfg = cfg or load_config()
-
-    target = cfg["project"]["target"]
-    seed = cfg["project"]["random_state"]
-    mcfg = cfg["model"]
-
-    store = get_storage(cfg)
-    kw = store.io_kwargs()
-
-    print("--- Iniciando Pipeline com ABT Finalizada ---")
-    df = pd.read_csv(store.path("abt", cfg["data"]["abt_file"]), **kw)
-
-    # Artefatos do modelo vão para o bucket `models`, sob a subpasta do modelo
-    model_name = mcfg["name"]
-    prefix = f"{model_name}/"
-
-    # 1. Mantém apenas colunas numéricas + o target
-    y = df[target]
-    df = df.select_dtypes(include=["number"]).drop(columns=[target], errors="ignore")
-    df = df.fillna(0)
-    df[target] = y
-
-    # 2. Feature engineering (configurável)
-    if mcfg["feature_engineering"].get("renda_por_familia") \
-            and "AMT_INCOME_TOTAL" in df.columns and "CNT_FAM_MEMBERS" in df.columns:
-        df["RENDA_POR_FAMILIA"] = df["AMT_INCOME_TOTAL"] / (df["CNT_FAM_MEMBERS"] + 1)
-
-    X = df.drop(columns=[target])
-    y = df[target]
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=mcfg["test_size"], random_state=seed
-    )
-    # 3. Seleção de variáveis por importância (configurável)
-    fs = mcfg["feature_selection"]
-    if fs["enabled"]:
-        print("Rankeando variáveis...")
-        ranker = RandomForestClassifier(
-            n_estimators=100, random_state=seed, n_jobs=mcfg["hyperparameters"]["n_jobs"]
-        )
-        ranker.fit(X_train, y_train)
-        importances = pd.Series(ranker.feature_importances_, index=X_train.columns)
-        top_features = importances.nlargest(fs["top_n"]).index.tolist()
-        X_train = X_train[top_features]
-        X_test = X_test[top_features]
-        print(f"Features selecionadas para treino: {top_features}")
-    else:
-        top_features = X_train.columns.tolist()
-
-    # 3.1 Salva conjunto de teste (X_test, y_test) no bucket `models` p/ avaliação futura
-    X_test.to_csv(store.path("models", prefix + "X_test.csv"), index=False, **kw)
-    y_test.to_csv(store.path("models", prefix + "y_test.csv"), index=False, **kw)
-
-
-    # 4. Balanceamento (configurável: smote | class_weight | none)
-    balancing = mcfg["balancing"]
-    if balancing.get("method") == "smote":
-        X_train, y_train = SMOTE(random_state=seed).fit_resample(X_train, y_train)
-
-    class_weight = balancing.get("class_weight")
-    if class_weight is not None:
-        # YAML pode carregar as chaves como str; garante int (rótulos das classes)
-        class_weight = {int(k): v for k, v in class_weight.items()}
-
-    hp = mcfg["hyperparameters"]
-    model = RandomForestClassifier(
-        n_estimators=hp["n_estimators"],
-        max_depth=hp["max_depth"],
-        n_jobs=hp["n_jobs"],
-        class_weight=class_weight,
-        random_state=seed,
-    )
-    model.fit(X_train, y_train)
-
-    # 5. Avaliação no conjunto de TESTE (held-out) — métrica oficial: ROC AUC
-    probs = model.predict_proba(X_test)[:, 1]
-    threshold = mcfg["threshold"]
-    y_pred = (probs >= threshold).astype(int)
-
-    print("\n--- Relatório Final (conjunto de teste) ---")
-    print(f"ROC AUC: {roc_auc_score(y_test, probs):.4f}")
-    print(f"Threshold aplicado: {threshold}")
-    print(classification_report(y_test, y_pred))
-
-    # 6. Persistência do modelo no bucket `models`
-    model_ref = store.path("models", prefix + mcfg["filename"])
-    with store.open("models", prefix + mcfg["filename"], "wb") as fh:
-        joblib.dump(model, fh)
-    print(f"Modelo salvo em: {model_ref}")
-
-    # 7. Importância das variáveis do modelo final
-    fig_ref = store.path("models", prefix + "feature_importance_final.png")
-    pd.Series(model.feature_importances_, index=top_features).nlargest(10).plot(kind="barh")
-    plt.title("Top 10 Variáveis (após merge Bureau + PrevApp)")
+    feat_imp = pd.Series(importances, index=feature_names).sort_values(ascending=False).head(20)
+    plt.figure(figsize=(10, 6))
+    feat_imp.plot(kind='barh', color='skyblue')
+    plt.title(f'Top 20 Features: {nome}')
     plt.tight_layout()
-    with store.open("models", prefix + "feature_importance_final.png", "wb") as fh:
-        plt.savefig(fh, format="png")
-    print(f"Gráfico salvo em: {fig_ref}")
+    
+    # Salva na pasta raiz do modelo
+    with store.open("models", f"{nome}/feature_importance.png", "wb") as fh:
+        plt.savefig(fh)
+        plt.close()
 
+def train_and_evaluate():
+    cfg = yaml.safe_load(open(PROJECT_ROOT / "Model" / "config.yml"))
+    store = get_storage(cfg)
+    
+    df = pd.read_csv(store.path("abt", "train.csv"), **store.io_kwargs())
+    target = cfg["project"]["target"]
+    
+    cols_numericas = df.select_dtypes(include=[np.number]).columns.tolist()
+    if target not in cols_numericas: cols_numericas.append(target)
+    
+    X_train = df[cols_numericas].drop(columns=[target])
+    y_train = df[target]
+    
+    feat_eng = FeatureEngineering()
+    X_train_trans = feat_eng.transform(X_train)
+    feature_names = X_train_trans.columns.tolist()
+
+    preprocessor = ColumnTransformer(transformers=[
+        ('num', Pipeline([('imputer', SimpleImputer(strategy='median')), ('scaler', StandardScaler())]), 
+         make_column_selector(dtype_include=np.number))
+    ], remainder='passthrough')
+
+    modelos_grid = {
+        'XGBOOST': {
+            'model': xgb.XGBClassifier(n_jobs=1, scale_pos_weight=5), # Exemplo de peso para inadimplentes
+            'params': {'model__n_estimators': [100]}
+        },
+        'RANDOM_FOREST': {'model': RandomForestClassifier(n_jobs=1), 'params': {'model__n_estimators': [100]}},
+        'LOGISTIC_REGRESSION': {'model': LogisticRegression(max_iter=1000), 'params': {'model__C': [0.1]}}
+    }
+
+    leaderboard = []
+    for nome, config in modelos_grid.items():
+        print(f"Treinando {nome}...")
+        pipe = Pipeline([('feat_eng', feat_eng), ('preprocessor', preprocessor), ('model', config['model'])])
+        grid = GridSearchCV(pipe, config['params'], cv=2, scoring='roc_auc', n_jobs=1)
+        grid.fit(X_train, y_train)
+        
+        melhor_modelo = grid.best_estimator_
+        
+        # Calcular Threshold Ótimo (Critério de Youden)
+        probs = melhor_modelo.predict_proba(X_train)[:, 1]
+        fpr, tpr, thresholds = roc_curve(y_train, probs)
+        best_threshold = thresholds[np.argmax(tpr - fpr)]
+        
+        # SALVAR ARTEFATOS (Direto na pasta do nome do modelo)
+        with store.open("models", f"{nome}/model.pkl", "wb") as fh:
+            joblib.dump(melhor_modelo, fh)
+        
+        with store.open("models", f"{nome}/threshold.txt", "w") as f:
+            f.write(str(best_threshold))
+        
+        save_feature_importance(melhor_modelo, feature_names, store, nome)
+        leaderboard.append({'Modelo': nome, 'AUC': grid.best_score_})
+
+    # Salvar Leaderboard na raiz do bucket
+    with store.open("models", "leaderboard.csv", "w") as fh:
+        pd.DataFrame(leaderboard).sort_values(by='AUC', ascending=False).to_csv(fh, index=False)
+    
+    print("Treino concluído. Artefatos organizados no MinIO.")
 
 if __name__ == "__main__":
-    train_model()
+    train_and_evaluate()

@@ -52,10 +52,41 @@ Via reproduzível (Linux/macOS/Windows) que sobe MinIO + Airflow e roda o pipeli
 
 ```bash
 cp .env.example .env
-python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  # cole em AIRFLOW_FERNET_KEY
-docker compose up -d --build
+rm .env.example
+# python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  # cole em AIRFLOW_FERNET_KEY
+docker compose up -d --build # Para baixar as imagens
+docker compose up -d # Para iniciar os conteiners
 ```
 
-- MinIO: <http://localhost:9001> · Airflow: <http://localhost:8080>
+Acesse o MinIO:
+- MinIO: <http://localhost:9001>
+  - **user**=minioadmin
+  - **Password**=minioadmin123
+
+Acesse o Airflow:
+- Airflow: <http://localhost:8080>
+  - **user**=admin
+  - **Password**=admin
+
+Acesse o Streamlit:
+- Streamlit <http://localhost:8501>
+
 - O `seeder` carrega `Dados/*.csv` no bucket `raw`; dispare o DAG
   `home_credit_pipeline` no Airflow. Detalhes em [MLOps/README.md](MLOps/README.md).
+
+- **obs**: Se der erro de permission 403, execute este código:
+docker compose exec airflow-scheduler chmod -R 777 /opt/airflow/logs
+
+
+### COMANDOS NO DOCKER
+# 1. Parar tudo e remover containers
+docker compose down
+
+# 2. Remover caches de build antigos (limpeza profunda)
+docker builder prune -f
+
+# 3. Construir novamente
+docker compose build --no-cache
+
+# 4. Verificar os logs
+docker compose logs -f streamlit-app

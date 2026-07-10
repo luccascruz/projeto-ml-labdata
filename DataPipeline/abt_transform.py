@@ -1,66 +1,64 @@
-"""Construção da ABT (clean -> abt).
-
-Lê as bases sanitizadas do bucket `clean` (MinIO/S3), agrega o histórico
-(bureau e previous_application) para uma linha por cliente e junta tudo na
-tabela principal. Nomes de coluna, agregações, renomeações e buckets vêm do
-config.yml — nada chumbado. Saída: `abt.csv` no bucket `abt`.
-"""
-
 import sys
 import pandas as pd
 from pathlib import Path
 import yaml
 
-# Raiz do projeto = pasta-pai de DataPipeline/
+# Configuração de caminhos
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_ROOT / "DataPipeline" / "config.yml"
-
-# storage.py fica na raiz do projeto: garante o import ao rodar como script
 sys.path.insert(0, str(PROJECT_ROOT))
 from storage import get_storage
-
 
 def load_config(path: Path = CONFIG_PATH) -> dict:
     with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
-
-def build_abt(cfg: dict | None = None) -> pd.DataFrame:
+def build_abt(cfg: dict | None = None) -> None:
     cfg = cfg or load_config()
     store = get_storage(cfg)
     kw = store.io_kwargs()
 
     clean_files = cfg["data"]["clean_files"]
     id_col = cfg["project"]["id_column"]
+    target = cfg["project"]["target"]
 
-    print("--- Construindo a ABT Final ---")
+    print("--- Construindo ABT (Apenas Agregações) ---")
 
-    # 1. Carregar bases sanitizadas (parquet) do bucket `clean`
+    # 1. Carregar bases sanitizadas
     app = pd.read_parquet(store.path("clean", clean_files["application"]), **kw)
-    bureau = pd.read_parquet(store.path("clean", clean_files["bureau"]), **kw)
-    prev_app = pd.read_parquet(store.path("clean", clean_files["previous_application"]), **kw)
+    prev = pd.read_parquet(store.path("clean", clean_files["previous_application"]), **kw)
+    bur = pd.read_parquet(store.path("clean", clean_files["bureau"]), **kw)
 
-    # 2. Agregações (config-driven), uma linha por id_col
-    aggs = cfg["abt"]["aggregations"]
-    rename = cfg["abt"]["rename"]
-    bureau_agg = bureau.groupby(id_col).agg(aggs["bureau"]).rename(columns=rename)
-    prev_agg = prev_app.groupby(id_col).agg(aggs["previous_application"]).rename(columns=rename)
+    # 2. Agregações (Apenas o que precisa ser reduzido para o nível do cliente)
+    prev_stats = prev.groupby(id_col).agg({
+        'SK_ID_PREV': 'count',
+        'NAME_CONTRACT_STATUS': lambda x: (x == 'Approved').mean()
+    }).rename(columns={'SK_ID_PREV': 'PREV_COUNT', 'NAME_CONTRACT_STATUS': 'PREV_APPROVAL_RATE'})
 
-    # 3. Merge na tabela principal
-    print("Realizando os merges...")
-    abt = app.merge(bureau_agg, on=id_col, how="left")
-    abt = abt.merge(prev_agg, on=id_col, how="left")
+    bureau_stats = bur.groupby(id_col).agg({
+        'SK_ID_BUREAU': 'count',
+        'AMT_CREDIT_SUM_DEBT': 'sum',
+        'AMT_CREDIT_SUM': 'sum'
+    }).rename(columns={'SK_ID_BUREAU': 'BUREAU_LOAN_COUNT'})
 
-    # 4. Clientes sem histórico recebem o valor configurado
-    abt = abt.fillna(cfg["abt"]["fill_missing_after_merge"])
+    # 3. Merge
+    df = app.merge(prev_stats, on=id_col, how='left').merge(bureau_stats, on=id_col, how='left')
+    
+    # Preenchimento simples para evitar NaNs após o merge (opcional, mas recomendado)
+    df = df.fillna(0)
 
-    # 5. Salvar ABT no bucket `abt`
-    output_abt = store.path("abt", cfg["data"]["abt_file"])
-    abt.to_csv(output_abt, index=False, **kw)
-    print(f"ABT Final construída com sucesso! Shape: {abt.shape}")
-    print(f"Salva em: {output_abt}")
-    return abt
+    # 4. Divisão Train/Val
+    print("Realizando split...")
+    train, val = train_test_split(
+        df, test_size=0.2, random_state=42, stratify=df[target]
+    )
 
+    # 5. Escrita
+    train.to_csv(store.path("abt", "train.csv"), index=False, **kw)
+    val.to_csv(store.path("abt", "val.csv"), index=False, **kw)
+    
+    print(f"ABT Finalizada. Shape Train: {train.shape}, Val: {val.shape}")
 
 if __name__ == "__main__":
+    from sklearn.model_selection import train_test_split
     build_abt()

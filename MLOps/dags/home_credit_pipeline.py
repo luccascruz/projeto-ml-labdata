@@ -17,7 +17,7 @@ PROJECT = os.environ.get("PROJECT_HOME", "/opt/project")
 default_args = {"owner": "mlops", "retries": 0}
 
 with DAG(
-    dag_id="home_credit_pipeline",
+    dag_id="home-credit-pipeline",
     description="raw -> clean -> abt -> train (Home Credit)",
     start_date=datetime(2026, 1, 1),
     schedule=None,          # disparo manual
@@ -25,16 +25,19 @@ with DAG(
     default_args=default_args,
     tags=["home-credit", "mlops"],
 ) as dag:
+    
     sanitize = BashOperator(
-        task_id="sanitize",
+        task_id="data-sanitization",
         bash_command=f"python {PROJECT}/DataPipeline/data_sanitization.py",
     )
+    
     build_abt = BashOperator(
-        task_id="build_abt",
+        task_id="build-abt",
         bash_command=f"python {PROJECT}/DataPipeline/abt_transform.py",
     )
+    
     train = BashOperator(
-        task_id="train",
+        task_id="train-model",
         bash_command=f"python {PROJECT}/Model/train.py",
     )
 
