@@ -51,9 +51,6 @@ Via reproduzível (Linux/macOS/Windows) que sobe MinIO + Airflow e roda o pipeli
 `raw → clean → abt → train` orquestrado:
 
 ```bash
-cp .env.example .env
-rm .env.example
-# python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  # cole em AIRFLOW_FERNET_KEY
 docker compose up -d --build # Para baixar as imagens
 docker compose up -d # Para iniciar os conteiners
 ```

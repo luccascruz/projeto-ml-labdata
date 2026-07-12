@@ -1,73 +1,54 @@
-from pathlib import Path
 import joblib
-import numpy as np
 import pandas as pd
 import yaml
-from sklearn.base import BaseEstimator, TransformerMixin
+from pathlib import Path
 from storage import get_storage
 
-# --- CLASSE DE FEATURE ENGINEERING ---
-class FeatureEngineering(BaseEstimator, TransformerMixin):
-    def fit(self, X, y=None):
-        return self
-    def transform(self, X):
-        X = X.copy()
-        # Garante tratamento de tipos antes do cálculo
-        cols = ['AMT_CREDIT_SUM_DEBT', 'AMT_INCOME_TOTAL', 'BUREAU_LOAN_COUNT']
-        for col in cols:
-            X[col] = pd.to_numeric(X[col], errors='coerce')
-            
-        X['DTI_RATIO'] = X['AMT_CREDIT_SUM_DEBT'] / X['AMT_INCOME_TOTAL'].replace(0, np.nan)
-        X['AVG_DEBT_PER_LOAN'] = X['AMT_CREDIT_SUM_DEBT'] / X['BUREAU_LOAN_COUNT'].replace(0, np.nan)
-        return X.replace([np.inf, -np.inf], np.nan)
-
-def carregar_melhor_modelo():
-    """
-    Identifica dinamicamente o melhor modelo via leaderboard.csv
-    e carrega o pipeline e o threshold otimizado.
-    """
-    try:
-        PROJECT_ROOT = Path(__file__).parents[1]
-        with open(PROJECT_ROOT / "Model" / "config.yml", "r") as f:
-            cfg = yaml.safe_load(f)
-        
-        store = get_storage(cfg)
-        
-        # 1. Carregar Leaderboard da raiz do bucket
+def carregar_modelo_minio(model_name: str = None):
+    """Carrega artefatos do MinIO respeitando a estrutura de pastas atual."""
+    # 1. Configuração e Storage
+    PROJECT_ROOT = Path(__file__).parents[1]
+    with open(PROJECT_ROOT / "Model" / "config.yml", "r") as f:
+        cfg = yaml.safe_load(f)
+    store = get_storage(cfg)
+    
+    # 2. Identificar melhor modelo se necessário
+    if model_name is None:
         with store.open("models", "leaderboard.csv", "r") as f:
-            ranking = pd.read_csv(f)
-        
-        melhor_nome = ranking.iloc[0]['Modelo']
-        
-        # 2. Carregar o Modelo da subpasta correspondente
-        # A estrutura agora é: models/XGBOOST/model.pkl
-        with store.open("models", f"{melhor_nome}/model.pkl", "rb") as fh:
-            model = joblib.load(fh)
-            
-        # 3. Carregar o Threshold da mesma subpasta
-        with store.open("models", f"{melhor_nome}/threshold.txt", "r") as f:
-            threshold_str = f.read().strip()
-            threshold = float(threshold_str)
-            
-        return model, threshold
-        
-    except Exception as e:
-        print(f"Erro ao carregar modelo do Storage: {e}")
-        return None, None
+            model_name = pd.read_csv(f).iloc[0]['Modelo']
 
-def prever_risco(model, dados_input: pd.DataFrame, threshold: float):
-    """
-    Realiza a predição utilizando o threshold carregado dinamicamente.
-    """
-    try:
-        # Probabilidade da classe 1 (Inadimplente)
-        prob = model.predict_proba(dados_input)[:, 1][0]
+    # 3. Caminhos baseados nos seus prints:
+    # A estrutura observada é: models/models/{nome_do_modelo}/...
+    # E: models/evaluation_data/...
+    
+    # Carregamento do Modelo (caminho: models/models/NOME/model.pkl)
+    # Note que adicionei 'models/' antes do nome_modelo para refletir o print
+    model_path = f"models/{model_name}/model.pkl"
+    threshold_path = f"models/{model_name}/threshold.txt"
+    
+    with store.open("models", model_path, "rb") as fh:
+        model = joblib.load(fh)
+    with store.open("models", threshold_path, "r") as f:
+        threshold = float(f.read().strip())
         
-        # Aplica o threshold carregado do arquivo
-        is_mau = bool(prob >= threshold)
+    # Carregamento dos artefatos de inferência (caminho: models/evaluation_data/...)
+    with store.open("models", "evaluation_data/medianas.pkl", "rb") as fh:
+        medianas = joblib.load(fh)
+    with store.open("models", "evaluation_data/feature_names.pkl", "rb") as fh:
+        feature_names = joblib.load(fh)
         
-        return float(prob), is_mau
-        
-    except Exception as e:
-        print(f"Erro crítico na inferência: {e}")
-        return 0.0, False
+    return model, threshold, medianas, feature_names
+
+def prever_risco(model, threshold, medianas, feature_names, dados_input: pd.DataFrame):
+    """Realiza a inferência com tratamento de dados consistente."""
+    # Cria base com medianas e garante ordem das colunas
+    df_modelo = pd.DataFrame([medianas], columns=feature_names).copy()
+    
+    # Atualiza apenas as colunas que vieram no input
+    for col in dados_input.columns:
+        if col in df_modelo.columns:
+            df_modelo[col] = float(dados_input[col].iloc[0])
+            
+    # Predição
+    prob = model.predict_proba(df_modelo)[0, 1]
+    return float(prob), bool(prob >= threshold)
