@@ -1,137 +1,163 @@
-"""Treino do modelo de risco de crédito (abt -> modelo).
-
-Lê o config próprio de /Model (Model/config.yml): hiperparâmetros, seleção de
-variáveis, estratégia de balanceamento, threshold e buckets — nada chumbado.
-Lê a ABT do bucket `abt` (MinIO/S3) e salva `.pkl`/artefatos no bucket `models`
-via storage.py. Métrica oficial reportada: ROC AUC.
+"""
+Módulo de Treinamento e Avaliação Dinâmica de Modelos (Versão Docker Otimizada).
 """
 
+from storage import get_storage
+import matplotlib.pyplot as plt
 import sys
 import pandas as pd
+import numpy as np
 import joblib
-import matplotlib
-matplotlib.use("Agg")  # backend sem display: funciona em servidor/headless (Docker)
-import matplotlib.pyplot as plt
-from pathlib import Path
 import yaml
-from sklearn.model_selection import train_test_split
+import xgboost as xgb
+from pathlib import Path
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report, roc_auc_score
-from imblearn.over_sampling import SMOTE
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import precision_recall_curve, roc_auc_score
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+import matplotlib
+matplotlib.use('Agg')
 
-# Raiz do projeto = pasta-pai de Model/ (este arquivo vive em Model/)
+# --- CONFIGURAÇÃO ---
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CONFIG_PATH = PROJECT_ROOT / "Model" / "config.yml"
-
-# storage.py fica na raiz do projeto: garante o import ao rodar como script
 sys.path.insert(0, str(PROJECT_ROOT))
-from storage import get_storage
 
 
-def load_config(path: Path = CONFIG_PATH) -> dict:
-    with open(path, encoding="utf-8") as f:
+def load_config():
+    with open(PROJECT_ROOT / "Model" / "config.yml", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
-def train_model(cfg: dict | None = None) -> None:
-    cfg = cfg or load_config()
+def save_feature_importance(model, feature_names, store, model_name):
+    """Gera gráfico de importância e salva no MinIO para explicabilidade."""
+    est = model.named_steps['model'] if isinstance(model, Pipeline) else model
+    if hasattr(est, 'feature_importances_'):
+        imp = pd.Series(est.feature_importances_,
+                        index=feature_names).nlargest(15)
+        plt.figure(figsize=(8, 6))
+        imp.sort_values().plot(kind='barh', color='skyblue')
+        plt.title(f'Top 15 Features: {model_name}')
+        plt.tight_layout()
+        with store.open("models", f"models/{model_name}/feature_importance.png", "wb") as fh:
+            plt.savefig(fh)
+        plt.close()
 
-    target = cfg["project"]["target"]
-    seed = cfg["project"]["random_state"]
-    mcfg = cfg["model"]
 
+def build_models(cfg, y_train):
+    """Constrói modelos dinamicamente a partir do config.yml."""
+    random_state = cfg["project"]["random_state"]
+    models_cfg = cfg["models"]
+    models = {}
+
+    for name, info in models_cfg.items():
+        if not info.get("enabled", True):
+            continue
+        params = info.get("params", {}).copy()
+        params["random_state"] = random_state
+
+        if info["class"] == "XGBClassifier":
+            neg, pos = (y_train == 0).sum(), (y_train == 1).sum()
+            params["scale_pos_weight"] = neg / pos
+            models[name] = xgb.XGBClassifier(**params)
+        elif info["class"] == "RandomForestClassifier":
+            models[name] = RandomForestClassifier(**params)
+        elif info["class"] == "LogisticRegression":
+            base = LogisticRegression(**params)
+            models[name] = Pipeline([("scaler", StandardScaler()), ("model", base)]) if info.get(
+                "use_scaler") else base
+    return models
+
+
+def train_and_evaluate():
+    cfg = load_config()
     store = get_storage(cfg)
     kw = store.io_kwargs()
+    target = cfg["project"]["target"]
 
-    print("--- Iniciando Pipeline com ABT Finalizada ---")
-    df = pd.read_csv(store.path("abt", cfg["data"]["abt_file"]), **kw)
+    print("Carregando ABT do MinIO...")
+    train_df = pd.read_parquet(store.path(
+        "abt", cfg["abt_files"]["train"]), **kw)
+    val_df = pd.read_parquet(store.path("abt", cfg["abt_files"]["val"]), **kw)
+    test_df = pd.read_parquet(store.path(
+        "abt", cfg["abt_files"]["test"]), **kw)
 
-    # Artefatos do modelo vão para o bucket `models`, sob a subpasta do modelo
-    model_name = mcfg["name"]
-    prefix = f"{model_name}/"
+    X_train, y_train = train_df.drop(columns=[target]), train_df[target]
+    X_val, y_val = val_df.drop(columns=[target]), val_df[target]
+    X_test, y_test = test_df.drop(columns=[target]), test_df[target]
 
-    # 1. Mantém apenas colunas numéricas + o target
-    y = df[target]
-    df = df.select_dtypes(include=["number"]).drop(columns=[target], errors="ignore")
-    df = df.fillna(0)
-    df[target] = y
+    # --- Persistência de Artefatos de Suporte ---
+    print("Salvando artefatos de inferência e auditoria...")
 
-    # 2. Feature engineering (configurável)
-    if mcfg["feature_engineering"].get("renda_por_familia") \
-            and "AMT_INCOME_TOTAL" in df.columns and "CNT_FAM_MEMBERS" in df.columns:
-        df["RENDA_POR_FAMILIA"] = df["AMT_INCOME_TOTAL"] / (df["CNT_FAM_MEMBERS"] + 1)
+    with store.open("models", "evaluation_data/medianas.pkl", "wb") as fh:
+        joblib.dump(X_train.median(numeric_only=True), fh)
+    with store.open("models", "evaluation_data/feature_names.pkl", "wb") as fh:
+        joblib.dump(X_train.columns.tolist(), fh)
+    with store.open("models", "evaluation_data/X_val.pkl", "wb") as fh:
+        joblib.dump(X_val, fh)
+    with store.open("models", "evaluation_data/y_val.pkl", "wb") as fh:
+        joblib.dump(y_val, fh)
+    with store.open("models", "evaluation_data/X_test.pkl", "wb") as fh:
+        joblib.dump(X_test, fh)
+    with store.open("models", "evaluation_data/y_test.pkl", "wb") as fh:
+        joblib.dump(y_test, fh)
 
-    X = df.drop(columns=[target])
-    y = df[target]
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=mcfg["test_size"], random_state=seed
-    )
-    # 3. Seleção de variáveis por importância (configurável)
-    fs = mcfg["feature_selection"]
-    if fs["enabled"]:
-        print("Rankeando variáveis...")
-        ranker = RandomForestClassifier(
-            n_estimators=100, random_state=seed, n_jobs=mcfg["hyperparameters"]["n_jobs"]
-        )
-        ranker.fit(X_train, y_train)
-        importances = pd.Series(ranker.feature_importances_, index=X_train.columns)
-        top_features = importances.nlargest(fs["top_n"]).index.tolist()
-        X_train = X_train[top_features]
-        X_test = X_test[top_features]
-        print(f"Features selecionadas para treino: {top_features}")
-    else:
-        top_features = X_train.columns.tolist()
+    # --- Loop de Treinamento ---
+    modelos = build_models(cfg, y_train)
+    resultados = []
 
-    # 3.1 Salva conjunto de teste (X_test, y_test) no bucket `models` p/ avaliação futura
-    X_test.to_csv(store.path("models", prefix + "X_test.csv"), index=False, **kw)
-    y_test.to_csv(store.path("models", prefix + "y_test.csv"), index=False, **kw)
+    # Configuração de limites: Otimiza para Recall > min_recall_target dentro do range [min, max]
+    min_recall = cfg.get("evaluation", {}).get("min_recall_target", 0.70)
+    range_cfg = cfg.get("evaluation", {}).get(
+        "threshold_range", {"min": 0.1, "max": 0.9})
 
+    for nome, model in modelos.items():
+        print(f"Treinando {nome}...")
+        if isinstance(model, xgb.XGBClassifier):
+            model.fit(X_train, y_train, eval_set=[
+                      (X_val, y_val)], verbose=False)
+        else:
+            model.fit(X_train, y_train)
 
-    # 4. Balanceamento (configurável: smote | class_weight | none)
-    balancing = mcfg["balancing"]
-    if balancing.get("method") == "smote":
-        X_train, y_train = SMOTE(random_state=seed).fit_resample(X_train, y_train)
+        probs = model.predict_proba(X_val)[:, 1]
+        auc = roc_auc_score(y_val, probs)
+        prec, rec, thresh = precision_recall_curve(y_val, probs)
 
-    class_weight = balancing.get("class_weight")
-    if class_weight is not None:
-        # YAML pode carregar as chaves como str; garante int (rótulos das classes)
-        class_weight = {int(k): v for k, v in class_weight.items()}
+        # Otimização: Acha o threshold que maximiza a precisão, mantendo recall >= min_recall
+        # E respeitando os limites [min, max] definidos no YAML
+        valid_mask = (thresh >= range_cfg["min"]) & (
+            thresh <= range_cfg["max"])
+        recall_mask = rec[:-1] >= min_recall
 
-    hp = mcfg["hyperparameters"]
-    model = RandomForestClassifier(
-        n_estimators=hp["n_estimators"],
-        max_depth=hp["max_depth"],
-        n_jobs=hp["n_jobs"],
-        class_weight=class_weight,
-        random_state=seed,
-    )
-    model.fit(X_train, y_train)
+        candidates = np.where(valid_mask & recall_mask)[0]
 
-    # 5. Avaliação no conjunto de TESTE (held-out) — métrica oficial: ROC AUC
-    probs = model.predict_proba(X_test)[:, 1]
-    threshold = mcfg["threshold"]
-    y_pred = (probs >= threshold).astype(int)
+        if len(candidates) > 0:
+            # Pega o índice que tem a maior precisão entre os candidatos válidos
+            best_idx = candidates[np.argmax(prec[candidates])]
+            best_thresh = thresh[best_idx]
+        else:
+            # Fallback seguro caso nenhum ponto atenda a restrição
+            best_thresh = range_cfg.get("min", 0.3)
+            print(
+                f"AVISO: {nome} não atingiu o Recall mínimo no range. Usando threshold mínimo.")
 
-    print("\n--- Relatório Final (conjunto de teste) ---")
-    print(f"ROC AUC: {roc_auc_score(y_test, probs):.4f}")
-    print(f"Threshold aplicado: {threshold}")
-    print(classification_report(y_test, y_pred))
+        resultados.append(
+            {'Modelo': nome, 'AUC': auc, 'Threshold': best_thresh})
 
-    # 6. Persistência do modelo no bucket `models`
-    model_ref = store.path("models", prefix + mcfg["filename"])
-    with store.open("models", prefix + mcfg["filename"], "wb") as fh:
-        joblib.dump(model, fh)
-    print(f"Modelo salvo em: {model_ref}")
+        # Persistência
+        with store.open("models", f"models/{nome}/model.pkl", "wb") as fh:
+            joblib.dump(model, fh)
+        with store.open("models", f"models/{nome}/threshold.txt", "w") as f:
+            f.write(str(best_thresh))
 
-    # 7. Importância das variáveis do modelo final
-    fig_ref = store.path("models", prefix + "feature_importance_final.png")
-    pd.Series(model.feature_importances_, index=top_features).nlargest(10).plot(kind="barh")
-    plt.title("Top 10 Variáveis (após merge Bureau + PrevApp)")
-    plt.tight_layout()
-    with store.open("models", prefix + "feature_importance_final.png", "wb") as fh:
-        plt.savefig(fh, format="png")
-    print(f"Gráfico salvo em: {fig_ref}")
+        save_feature_importance(model, X_train.columns, store, nome)
+
+    with store.open("models", "leaderboard.csv", "w") as fh:
+        pd.DataFrame(resultados).sort_values(
+            by='AUC', ascending=False).to_csv(fh, index=False)
+
+    print("Treino e persistência finalizados.")
 
 
 if __name__ == "__main__":
-    train_model()
+    train_and_evaluate()
