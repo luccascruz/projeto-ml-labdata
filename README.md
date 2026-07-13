@@ -1,11 +1,15 @@
-# Projeto final do módulo de AI/ML da LabData FIA: Home Credit
+# Projeto final do módulo de AI/ML da LabData FIA: Home Credit Default Risk
 
 - **Contexto**: O Home Credit, empresa que oferece empréstimos para clientes com pouco ou nenhum histórico de crédito, enfrenta o desafio de equilibrar a concessão de crédito com a minimização da inadimplência.
 - A "Dor" do Negócio: A análise manual ou baseada em regras simples de crédito é lenta e falha em capturar padrões complexos de risco, resultando em perda de receita (clientes bons negados) ou aumento de prejuízo (clientes inadimplentes aprovados).
 - **Objetivo**: Desenvolver um modelo de Machine Learning preditivo capaz de classificar a probabilidade de inadimplência de um solicitante, permitindo uma tomada de decisão automatizada, mais rápida e mais precisa.
 - **Impacto Esperado**: Aumentar a rentabilidade da carteira de crédito e promover a inclusão financeira de forma sustentável para o negócio.
 
+### Pré-Requisitos
 
+* python 3.12
+* Docker
+  
 ## Como treinar o modelo
 
 ### 1. Ambiente virtual
@@ -72,7 +76,7 @@ Acesse o Streamlit:
   `home_credit_pipeline` no Airflow. Detalhes em [MLOps/README.md](MLOps/README.md).
 
 - **obs**: Se der erro de permission 403, execute este código:
-docker compose exec airflow-scheduler chmod -R 777 /opt/airflow/logs
+`docker compose exec airflow-scheduler chmod -R 777 /opt/airflow/logs`
 
 
 ### COMANDOS NO DOCKER
