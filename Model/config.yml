@@ -64,8 +64,8 @@ evaluation:
   min_recall_target: 0.70
   primary_metric: roc_auc
   threshold_range:
-      min: 0.15
-      max: 0.25
+      min: 0.10
+      max: 0.35
   report_metrics:             # Métricas de auditoria do modelo
     - roc_auc
     - precision
@@ -74,3 +74,10 @@ evaluation:
     - ks
     - confusion_matrix
     - pr_curve
+
+# --- Autenticação MinIO ------------------------------------------------
+minio_credentials:
+  - AWS_ACCESS_KEY_ID: minioadmin
+  - AWS_SECRET_ACCESS_KEY: minioadmin123
+  - AWS_DEFAULT_REGION: us-east-1
+  - AWS_ENDPOINT: http://localhost:9000

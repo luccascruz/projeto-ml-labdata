@@ -1,32 +1,46 @@
-from storage import get_storage
-import sys
+"""Construção da ABT (clean -> abt)."""
+
 import pandas as pd
 import numpy as np
 from pathlib import Path
 import yaml
 from sklearn.model_selection import train_test_split
+from storage import get_storage
 
-# Configuração de caminhos
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT))
+CONFIG_PATH = PROJECT_ROOT / "DataPipeline" / "config.yml"
 
-# --- FUNÇÕES DE FEATURE ENGINEERING ---
+
+def load_config(path: Path = CONFIG_PATH) -> dict:
+    with open(path, encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
 def drop_rare_rows(df: pd.DataFrame, drop_rules: dict) -> pd.DataFrame:
+    """Remove linhas com categorias raras/inválidas (config: abt.drop_rows)."""
     for col, values in (drop_rules or {}).items():
         if col in df.columns:
+            before = len(df)
             df = df[~df[col].isin(values)]
+            removed = before - len(df)
+            if removed:
+                print(f"  Removidas {removed} linhas com {col} em {values}")
     return df.reset_index(drop=True)
 
 
 def build_application_features(app: pd.DataFrame) -> pd.DataFrame:
+    """Cria features a partir da tabela application_train."""
     app = app.copy()
     app["AGE"] = abs(app["DAYS_BIRTH"]) / 365.25
+
+    # Flag de ausência de histórico de emprego (desempregados/pensionistas
+    # ficam com DAYS_EMPLOYED nulo desde a sanitização) + imputação por mediana,
+    # em vez de deixar EMPLOYMENT_YEARS como NaN.
     app["FLAG_SEM_HISTORICO_EMPREGO"] = app["DAYS_EMPLOYED"].isna().astype("int8")
     employment_years = abs(app["DAYS_EMPLOYED"]) / 365.25
     app["EMPLOYMENT_YEARS"] = employment_years.fillna(
         employment_years.median())
 
-    # Razões Financeiras
     app["CREDIT_INCOME_RATIO"] = app["AMT_CREDIT"] / \
         app["AMT_INCOME_TOTAL"].replace(0, np.nan)
     app["ANNUITY_INCOME_RATIO"] = app["AMT_ANNUITY"] / \
@@ -50,6 +64,7 @@ def build_application_features(app: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_previous_features(prev: pd.DataFrame) -> pd.DataFrame:
+    """Cria features agregadas da tabela previous_application."""
     prev = prev.copy()
     prev["APP_CREDIT_RATIO"] = prev["AMT_APPLICATION"] / \
         prev["AMT_CREDIT"].replace(0, np.nan)
@@ -69,51 +84,136 @@ def build_previous_features(prev: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_bureau_features(bureau: pd.DataFrame) -> pd.DataFrame:
+    """Cria features agregadas da tabela bureau com granularidade."""
     bureau = bureau.copy()
-    bureau_features = bureau.groupby("SK_ID_CURR").agg(
-        BUREAU_LOAN_COUNT=("SK_ID_BUREAU", "count"),
-        TOTAL_DEBT=("AMT_CREDIT_SUM_DEBT", "sum"),
-        TOTAL_OVERDUE=("AMT_CREDIT_SUM_OVERDUE", "sum")
+
+    # Agregação completa de estatísticas do bureau
+    bureau_features = (
+        bureau
+        .groupby("SK_ID_CURR")
+        .agg(
+            BUREAU_LOAN_COUNT=("SK_ID_BUREAU", "count"),
+            TOTAL_CREDIT=("AMT_CREDIT_SUM", "sum"),
+            TOTAL_DEBT=("AMT_CREDIT_SUM_DEBT", "sum"),
+            MEAN_DEBT=("AMT_CREDIT_SUM_DEBT", "mean"),
+            MAX_DEBT=("AMT_CREDIT_SUM_DEBT", "max"),
+            TOTAL_OVERDUE=("AMT_CREDIT_SUM_OVERDUE", "sum"),
+            MEAN_OVERDUE=("AMT_CREDIT_SUM_OVERDUE", "mean"),
+            MEAN_DAYS_CREDIT=("DAYS_CREDIT", "mean"),
+            LAST_CREDIT=("DAYS_CREDIT", "max"),
+            CREDIT_TYPES=("CREDIT_TYPE", "nunique"),
+        )
     )
-    active_rate = bureau.assign(ACTIVE=bureau["CREDIT_ACTIVE"].eq(
-        "Active")).groupby("SK_ID_CURR")["ACTIVE"].mean()
+
+    # Cálculo da taxa de empréstimos ativos
+    active_rate = (
+        bureau
+        .assign(ACTIVE=bureau["CREDIT_ACTIVE"].eq("Active"))
+        .groupby("SK_ID_CURR")["ACTIVE"]
+        .mean()
+        .rename("ACTIVE_LOAN_RATE")
+    )
+
+    # Une as agregações com a taxa de ativos e reseta o índice
     return bureau_features.join(active_rate).reset_index()
 
 
 def build_final_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Cria features utilizando informações de múltiplas tabelas.
+
+    Pré-requisito: TOTAL_DEBT, BUREAU_LOAN_COUNT, EXT_SOURCE_2 e EXT_SOURCE_3
+    já devem estar com os NaNs de "sem histórico" tratados antes de chamar esta
+    função — caso contrário DTI_RATIO e AVG_DEBT_PER_LOAN saem inconsistentes
+    (ver explicação no chat).
+    """
+    df = df.copy()
     df["DTI_RATIO"] = df["TOTAL_DEBT"] / \
         df["AMT_INCOME_TOTAL"].replace(0, np.nan)
     df["AVG_DEBT_PER_LOAN"] = df["TOTAL_DEBT"] / \
         df["BUREAU_LOAN_COUNT"].replace(0, np.nan)
+
+    # Interações cruzadas de fontes externas
+    df["INCOME_x_EXT_SOURCE_2"] = df["AMT_INCOME_TOTAL"] * df["EXT_SOURCE_2"]
+    df["INCOME_x_EXT_SOURCE_3"] = df["AMT_INCOME_TOTAL"] * df["EXT_SOURCE_3"]
+
     return df
 
 
-def prepare_model_data(df, target, random_state):
-    features = pd.get_dummies(
-        df.drop(columns=["SK_ID_CURR"], errors="ignore"), dummy_na=True)
-    features[target] = df[target]
-    train_val, test = train_test_split(
-        features, test_size=0.2, stratify=features[target], random_state=random_state)
-    train, val = train_test_split(
-        train_val, test_size=0.25, stratify=train_val[target], random_state=random_state)
+def prepare_model_data(
+    df: pd.DataFrame,
+    target: str,
+    random_state: int,
+    test_size: float = 0.20,
+    val_size: float = 0.20,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Realiza o encoding das variáveis categóricas e divide
+    os dados em treino, validação e teste (holdout).
+    """
 
+    features = df.drop(
+        columns=[
+            target,
+            "SK_ID_CURR",
+        ],
+        errors="ignore",
+    )
+
+    features = pd.get_dummies(
+        features,
+        dummy_na=True,
+    )
+
+    features[target] = df[target]
+
+    # 1ª divisão: separa o TEST (holdout) do resto. Só deve ser tocado
+    # uma vez, no final, para avaliar o modelo já escolhido.
+    train_val, test = train_test_split(
+        features,
+        test_size=test_size,
+        stratify=features[target],
+        random_state=random_state,
+    )
+
+    # 2ª divisão: separa TREINO de VALIDAÇÃO dentro do que sobrou.
+    # val_size é fração do dataset ORIGINAL, então reconvertemos para
+    # fração do que sobrou depois de tirar o test.
+    val_relative_size = val_size / (1 - test_size)
+
+    train, validation = train_test_split(
+        train_val,
+        test_size=val_relative_size,
+        stratify=train_val[target],
+        random_state=random_state,
+    )
+
+    # Imputação por mediana — calculada SOMENTE no treino e aplicada em
+    # ambos os splits. Isso resolve dois problemas do fillna(0) anterior:
+    # (1) mediana preserva melhor a distribuição de colunas como EXT_SOURCE
+    # e as razões financeiras do que forçar tudo pra 0; (2) calcular a
+    # mediana depois do split (e só com o treino) evita vazamento de
+    # informação da validação para dentro do treino.
     numeric_cols = train.drop(columns=[target]).select_dtypes(
         include="number").columns
-    medianas = train[numeric_cols].median()
-    for split in (train, val, test):
-        split[numeric_cols] = split[numeric_cols].fillna(medianas).fillna(0)
-    return train, val, test
+    medianas_treino = train[numeric_cols].median()
+
+    for split in (train, validation, test):
+        split[numeric_cols] = split[numeric_cols].fillna(medianas_treino)
+        # Fallback: se alguma coluna do treino for 100% nula, a mediana
+        # também sai NaN — preenche com 0 pra garantir que nenhum NaN
+        # sobrevive antes do .fit() do modelo.
+        split[numeric_cols] = split[numeric_cols].fillna(0)
+
+    return train, validation, test
 
 
-# --- FLUXO PRINCIPAL ---
 def build_abt() -> None:
-    cfg = yaml.safe_load(open(PROJECT_ROOT / "DataPipeline" / "config.yml"))
+    """Constrói a Analytical Base Table (ABT) e salva no MinIO."""
+    cfg = load_config()
     store = get_storage(cfg)
     kw = store.io_kwargs()
 
     print("--- Construindo ABT no MinIO ---")
-
-    # 1. Leitura
     app = pd.read_parquet(store.path(
         "clean", cfg["data"]["clean_files"]["application"]), **kw)
     prev = pd.read_parquet(store.path(
@@ -121,22 +221,22 @@ def build_abt() -> None:
     bur = pd.read_parquet(store.path(
         "clean", cfg["data"]["clean_files"]["bureau"]), **kw)
 
-    # 2. Transformação
     app = build_application_features(drop_rare_rows(
         app, cfg.get("abt", {}).get("drop_rows")))
+
     df = app.merge(build_previous_features(prev), on="SK_ID_CURR", how="left") \
             .merge(build_bureau_features(bur), on="SK_ID_CURR", how="left")
 
-    # Flags de histórico e preenchimento
     df["FLAG_SEM_HISTORICO_PREVIA"] = df["PREV_COUNT"].isna().astype("int8")
     df["FLAG_SEM_HISTORICO_BUREAU"] = df["BUREAU_LOAN_COUNT"].isna().astype("int8")
 
-    cols_to_fill = ["PREV_COUNT", "BUREAU_LOAN_COUNT", "TOTAL_DEBT"]
-    df[cols_to_fill] = df[cols_to_fill].fillna(0)
+    # Preenchimento automático de todas as colunas de agregação
+    agg_cols = [c for c in df.columns if c.startswith(
+        ("PREV_", "BUREAU_", "TOTAL_"))]
+    df[agg_cols] = df[agg_cols].fillna(0)
 
     df = build_final_features(df).replace([np.inf, -np.inf], np.nan)
 
-    # 3. Model Data & Escrita
     train, val, test = prepare_model_data(
         df, cfg["project"]["target"], cfg["project"]["random_state"])
 
