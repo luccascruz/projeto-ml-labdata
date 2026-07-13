@@ -1,0 +1,83 @@
+# =============================================================================
+# config.yml — Configuração da ETAPA DE MODELAGEM (/Model)
+# Projeto: Home Credit Default Risk (LABDATA / FIA)
+# =============================================================================
+
+project:
+  target: TARGET            # Variável alvo
+  random_state: 42
+
+# --- Storage (MinIO) — Configuração para a classe get_storage --------------
+# ESSENCIAL para evitar o KeyError que você encontrou.
+storage:
+  buckets:
+    abt: abt
+    models: models
+
+# --- Entrada (onde o script busca a ABT no MinIO) ---------------------------
+# O script train.py usa abt_dir + abt_files
+paths:
+  model_dir: Model/artifacts
+  abt_dir: Dados/abt
+
+# --- Arquivos da ABT (Parquet garante integridade dos tipos) ----------------
+abt_files:
+  train: train.parquet
+  val: val.parquet
+  test: test.parquet
+
+# --- Modelagem (Definição dos modelos para iteração no treino) -------------
+models:
+  XGBOOST:
+    enabled: true
+    class: XGBClassifier
+    params:
+      n_estimators: 1000
+      learning_rate: 0.05
+      max_depth: 5
+      scale_pos_weight: auto   # Calculado dinamicamente em train.py
+      early_stopping_rounds: 50
+      
+  RANDOM_FOREST:
+    enabled: true
+    class: RandomForestClassifier
+    params:
+      class_weight: balanced
+      n_estimators: 200
+      n_jobs: -1
+  
+  LOGISTIC_REGRESSION:
+    enabled: true
+    class: LogisticRegression
+    use_scaler: true           # Pipeline com StandardScaler incluído no train.py
+    params:
+      class_weight: balanced
+      max_iter: 1000
+
+# --- Pós-Processamento e Avaliação -----------------------------------------
+# O threshold é o corte para classificar como "1" (Inadimplente)
+# O train.py ajusta isso para garantir o min_recall_target
+feature_engineering:
+  renda_por_familia: true     # Flag para futuras inclusões de lógica
+
+evaluation:
+  min_recall_target: 0.70
+  primary_metric: roc_auc
+  threshold_range:
+      min: 0.10
+      max: 0.35
+  report_metrics:             # Métricas de auditoria do modelo
+    - roc_auc
+    - precision
+    - recall
+    - f1
+    - ks
+    - confusion_matrix
+    - pr_curve
+
+# --- Autenticação MinIO ------------------------------------------------
+minio_credentials:
+  - AWS_ACCESS_KEY_ID: minioadmin
+  - AWS_SECRET_ACCESS_KEY: minioadmin123
+  - AWS_DEFAULT_REGION: us-east-1
+  - AWS_ENDPOINT: http://localhost:9000

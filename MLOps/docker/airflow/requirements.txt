@@ -1,0 +1,16 @@
+# Dependencias do pipeline instaladas na imagem do Airflow.
+# Pins alinhados ao requirements.txt da raiz; s3fs habilita a I/O no MinIO.
+# Se o build conflitar (s3fs x botocore), relaxar os '==' de pandas/pyarrow/scikit-learn.
+pandas==2.2.0
+pyarrow==24.0.0
+scikit-learn==1.4.0
+imbalanced-learn
+s3fs
+pyyaml
+joblib
+matplotlib
+numpy==1.26.4
+scipy==1.12.0
+xgboost==3.3.0
+seaborn
+ipywidgets

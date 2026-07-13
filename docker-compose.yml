@@ -1,1 +1,144 @@
+name: home-credit-mlops
 
+# Config comum dos servicos do Airflow (imagem, env, volumes).
+x-airflow-common: &airflow-common
+  build: ./MLOps/docker/airflow
+  image: hc-airflow:latest
+  environment:
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    # AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-'f_k_s_u_a_c_h_a_v_e_b_a_s_e_6_4_a_q_u_i_'}
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+    # AIRFLOW__LOGGING__REMOTE_LOGGING: "False" # FORÇA A LEITURA LOCAL E DESATIVA O SERVIDOR DE LOG REMOTO
+    # AIRFLOW__LOGGING__BASE_LOG_FOLDER: "/opt/airflow/logs" # Garante que o Webserver use o caminho absoluto local
+    PYTHONPATH: /opt/project
+    PROJECT_HOME: /opt/project   # lido pelo DAG (MLOps/dags/home_credit_pipeline.py) em vez de chumbado
+    # --- contrato de storage do pipeline (tudo S3/MinIO) ---
+    MINIO_ENDPOINT: ${MINIO_ENDPOINT:?defina MINIO_ENDPOINT no .env}
+    AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?defina AWS_ACCESS_KEY_ID no .env}
+    AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?defina AWS_SECRET_ACCESS_KEY no .env}
+    AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
+  volumes:
+    - ./MLOps/dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./:/opt/project
+  user: "${AIRFLOW_UID:-50000}:0"
+
+services:
+  # ------------------------------------------------------------------ MinIO
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?defina MINIO_ROOT_USER no .env (veja .env.example)}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?defina MINIO_ROOT_PASSWORD no .env}
+    ports:
+      - "9000:9000"   # API S3
+      - "9001:9001"   # console web
+    volumes:
+      - minio-data:/data
+
+  # ------------------------------------------------- cria os buckets (mc)
+  createbuckets:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_started
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?defina MINIO_ROOT_USER no .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?defina MINIO_ROOT_PASSWORD no .env}
+    entrypoint: >
+      /bin/sh -c "
+      until (mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD}) do echo 'aguardando minio...'; sleep 2; done &&
+      mc mb -p local/raw local/clean local/abt local/models &&
+      echo 'buckets prontos'
+      "
+
+  # --------------------------------------------- carga: Dados -> bucket raw
+  seeder:
+    build: ./MLOps/docker/seed
+    image: hc-seeder:latest
+    depends_on:
+      createbuckets:
+        condition: service_completed_successfully
+    environment:
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
+      # RAW_BUCKET nao definido: seed_minio.py resolve o bucket a partir do
+      # config.yml montado (storage.buckets.raw) — fonte unica do nome.
+      CONFIG_PATH: /app/config.yml
+      DATA_DIR: /data
+    volumes:
+      - ./Dados/raw:/data:ro
+      - ./DataPipeline/config.yml:/app/config.yml:ro
+
+  # ------------------------------------------------ metadados do Airflow
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ----------------------------------------------------- Airflow (init)
+  airflow-init:
+    <<: *airflow-common
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: >
+      /bin/bash -c "
+      airflow db migrate &&
+      airflow users create --username ${AIRFLOW_ADMIN_USER} --password ${AIRFLOW_ADMIN_PASSWORD} --firstname admin --lastname admin --role Admin --email admin@example.com || true
+      "
+
+  # ------------------------------------------------- Airflow (webserver)
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  # ------------------------------------------------- Airflow (scheduler)
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+  
+  # ----------------------------------------------------------------- Streamlit
+  streamlit-app:
+    build:
+      context: ./MLOps/docker/streamlit  # Aponta para a pasta do Dockerfile
+      dockerfile: Dockerfile             # O Dockerfile está aqui dentro
+    container_name: streamlit-app
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/app  # Mapeia a raiz para /app dentro do container
+    environment:
+      - PYTHONPATH=/app
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
+    depends_on:
+      - airflow-webserver
+
+volumes:
+  minio-data:
+  postgres-data:

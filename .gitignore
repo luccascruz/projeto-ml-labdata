@@ -1,3 +1,11 @@
+# Arquivos de dados
+*.csv
+*.pkl
+*.parquet
+
+# Artefatos gerados pelo treino (modelo + graficos)
+Model/artifacts/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -148,7 +156,7 @@ activemq-data/
 *.sage.py
 
 # Environments
-.env
+# .env
 .envrc
 .venv
 env/
@@ -216,3 +224,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Docs internos do fluxo de brainstorming (nao versionar)
+docs/superpowers/
