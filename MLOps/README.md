@@ -7,7 +7,7 @@ filesystem**. A forma canônica de reproduzir o projeto é subir este stack.
 
 ## Arquitetura
 
-![desenho_arquitetura](/MLOps/arquitetura_MLOps.png)
+![desenho_arquitetura](arquitetura_MLOps.png)
 
 ```
 Dados/raw/*.csv (host) --seeder-->             MinIO(raw)
