@@ -84,6 +84,16 @@ Na UI do Airflow, disparar o DAG `home-credit-pipeline`, ou via CLI:
 docker compose exec airflow-scheduler airflow dags trigger home-credit-pipeline
 ```
 
+Alternativa sem Airflow: `MLOps/pipeline_orchestration.py` é um runner local que
+executa a mesma sequência da DAG (`sanitize → build_abt → train`) — útil para
+validar o fluxo ponta a ponta. Requer as variáveis de ambiente do MinIO
+(`MINIO_ENDPOINT`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) apontando para
+uma instância acessível:
+
+```bash
+python MLOps/pipeline_orchestration.py
+```
+
 Ao final, o bucket `models/` contém, por modelo treinado
 (`XGBOOST`, `RANDOM_FOREST`, `LOGISTIC_REGRESSION`):
 
