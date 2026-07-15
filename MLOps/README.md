@@ -7,11 +7,13 @@ filesystem**. A forma canônica de reproduzir o projeto é subir este stack.
 
 ## Arquitetura
 
+![desenho_arquitetura](/MLOps/arquitetura_MLOps.png)
+
 ```
 Dados/*.csv (host)  --seeder-->            MinIO(raw)
 MinIO(raw)          --[Airflow: sanitize]--> MinIO(clean, parquet)
 MinIO(clean)        --[Airflow: build_abt]-> MinIO(abt/abt.csv)
-MinIO(abt)          --[Airflow: train]-----> MinIO(models/<name>/modelo_risco_credito.pkl)
+MinIO(abt)          --[Airflow: train]-----> MinIO(models/models/<name>/model.pkl)
 ```
 
 Componentes (`docker-compose.yml`, na raiz):
@@ -68,13 +70,69 @@ O repositório é montado em `/opt/project`. Alterar parâmetros em
 `DataPipeline/config.yml` ou `Model/config.yml` no host e re-disparar o DAG
 reflete a mudança **sem rebuild** da imagem.
 
-## Próximos passos (monitoramento e automação)
+## Monitoramento em produção (proposta)
 
-- **Monitoramento de dados/modelo:** logar métricas por execução (ROC AUC, KS),
-  validar schema/nulos na ingestão e alertar em falha.
-- **Data drift:** comparar a distribuição das features novas vs. base de treino
-  (PSI/KS) num DAG agendado; disparar re-treino ao ultrapassar um limiar.
-- **Ações automatizadas:** conectar a saída do modelo a uma ação de negócio
-  (aprovar/negar/encaminhar) via serviço de predição (FastAPI) + fila/evento.
-- **Registro de modelos:** versionar o `.pkl` no bucket `models/` por data/commit.
-```
+A `TARGET` é muito desbalanceada (~8% de inadimplência), então acurácia engana —
+um modelo que nunca prevê inadimplência "acerta" ~92% e é inútil. Por isso o
+acompanhamento se apoia em três frentes:
+
+1. **Performance do modelo (quando o rótulo real chega).** O desfecho do
+   empréstimo tem defasagem (meses), então isso é acompanhamento *batch*, não
+   online: a cada novo lote de empréstimos com resultado conhecido (pagou/não
+   pagou), recalcular **ROC AUC** (métrica oficial), **KS** e
+   **precisão/recall/F1 da classe inadimplente**, comparando **predito × real**.
+   Persistir essas métricas por execução (ex.: tabela `model_metrics` no
+   Postgres ou um bucket `monitoring/` no MinIO) para ver tendência ao longo do
+   tempo, não só o valor pontual.
+2. **Drift de dados e de score (sem esperar o rótulo).** Enquanto o rótulo não
+   matura, monitorar **PSI (Population Stability Index)** das features de
+   entrada e da distribuição do score do modelo, comparando a janela recente
+   contra a base de treino. Um DAG agendado no Airflow roda esse cálculo e
+   grava o PSI por feature; PSI > 0.2 numa feature crítica (renda, valor do
+   crédito, dívida no bureau) ou no score geral dispara alerta.
+3. **Falhas operacionais do pipeline/serviço.** Validar schema e nulos na
+   ingestão (task dedicada no DAG, falha o pipeline em vez de propagar dado
+   ruim), checar taxa de erro/latência do endpoint de predição (Streamlit/
+   FastAPI) e alertar (e-mail/Slack via `EmailOperator`/webhook do Airflow) se
+   uma task falhar ou o serviço ficar indisponível.
+
+Além da métrica técnica, o indicador que importa para o negócio é o **KPI de
+carteira**: taxa de inadimplência real da carteira aprovada pelo modelo vs. a
+taxa histórica sem modelo, e perda esperada evitada — é isso que sustenta
+"o modelo é o meio, não o fim" na banca.
+
+## Ações automatizadas (proposta — ML + automação + agentes de IA)
+
+A saída do `predict.py` (probabilidade + decisão pelo threshold) alimenta um
+fluxo de decisão, não só um número na tela:
+
+- **Aprovação/negativa automática dentro da faixa de confiança.** Score muito
+  abaixo do threshold → aprovação automática; muito acima → negativa
+  automática com justificativa gerada; na faixa intermediária (zona cinzenta
+  em torno do threshold) → encaminha para análise humana em vez de decidir
+  sozinho.
+- **Agente de IA para justificativa e próxima ação.** Um agente (LLM) recebe a
+  probabilidade, o threshold e as *top features* que mais pesaram na decisão
+  (`feature_importances_`, já extraído em `Model/predict.py`) e gera: (a) uma
+  explicação em linguagem natural para o analista/cliente (explicabilidade,
+  item já cobrado na etapa de grupo) e (b) uma recomendação de próxima ação
+  (ex.: "solicitar comprovante de renda adicional" em vez de negar direto).
+- **Disparo de re-treino por drift.** Quando o DAG de monitoramento (item
+  acima) detecta PSI acima do limiar por N execuções seguidas, ele aciona
+  automaticamente o DAG `home_credit_pipeline` para re-treinar com dados mais
+  recentes, e um agente resume o que mudou entre o modelo antigo e o novo
+  (features, métricas) para revisão humana antes de promover o novo `.pkl`.
+- **Registro de modelos.** Versionar o `.pkl` e as métricas de avaliação no
+  bucket `models/` por data/execução, para poder comparar e reverter (rollback)
+  se o modelo novo performar pior em produção.
+
+**Status:** desenhado nesta entrega; implementação de referência priorizada
+para o `predict.py` + Streamlit (serviço de predição) e para o DAG de
+sanitização/ABT/treino, que já rodam ponta a ponta no Airflow. O DAG de
+monitoramento/drift e o agente de justificativa são os próximos passos de
+código a partir deste desenho.
+
+### Melhorias ambiente
+- Rodar scripts python em seu próprio container com DockerOperator do airflow
+- Otimizar Dockerfiles de cada container - remover libs não utilizadas
+- Versões de imagens estáticas

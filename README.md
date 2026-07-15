@@ -8,8 +8,21 @@
 ### Pré-Requisitos
 
 * python 3.12
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
+
 * Docker
-  
+[![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](https://www.docker.com/)
+
+
+## 🚀 Primeiros Passos
+```bash
+# Para começar, clone o repositório em sua máquina local:
+git clone https://github.com/luccascruz/projeto-ml-labdata.git
+
+# Entre no seu projeto:
+cd projeto-ml-labdata
+```
+
 ## Como treinar o modelo
 
 ### 1. Ambiente virtual
@@ -91,3 +104,10 @@ docker compose build --no-cache
 
 # 4. Verificar os logs
 docker compose logs -f streamlit-app
+
+⚠️ **Observação** sobre Conflitos de Dependência (XGBoost)
+Durante o desenvolvimento do projeto, identificamos uma incompatibilidade crítica envolvendo a versão 3.3.0 do XGBoost. Esta versão, por ser muito recente, apresentou erros de serialização (Input stream corrupted) ao interagir com o joblib e versões legadas do ambiente.
+Execute o seguinte comando:
+```
+pip install xgboost==3.2.0
+```

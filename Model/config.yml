@@ -8,7 +8,6 @@ project:
   random_state: 42
 
 # --- Storage (MinIO) — Configuração para a classe get_storage --------------
-# ESSENCIAL para evitar o KeyError que você encontrou.
 storage:
   buckets:
     abt: abt
@@ -20,11 +19,15 @@ paths:
   model_dir: Model/artifacts
   abt_dir: Dados/abt
 
-# --- Arquivos da ABT (Parquet garante integridade dos tipos) ----------------
+# --- Arquivo da ABT ---------------------------------------------------------
 abt_files:
-  train: train.parquet
-  val: val.parquet
-  test: test.parquet
+  abt: abt.parquet
+
+# --- Split treino/validação/teste -------------------------------------------
+# Modificar aqui as proporções das bases de validação e teste
+split:
+  test_size: 0.20
+  val_size: 0.20
 
 # --- Modelagem (Definição dos modelos para iteração no treino) -------------
 models:
@@ -57,8 +60,6 @@ models:
 # --- Pós-Processamento e Avaliação -----------------------------------------
 # O threshold é o corte para classificar como "1" (Inadimplente)
 # O train.py ajusta isso para garantir o min_recall_target
-feature_engineering:
-  renda_por_familia: true     # Flag para futuras inclusões de lógica
 
 evaluation:
   min_recall_target: 0.70

@@ -1,13 +1,6 @@
 # =============================================================================
 # config.yml — Configuração do PIPELINE DE DADOS (/DataPipeline)
 # Projeto: Home Credit Default Risk (LABDATA / FIA)
-#
-# A estrutura de entrega (slide 10 do brief) exige um arquivo de configuração
-# em /DataPipeline E outro em /Model. Este aqui cuida do domínio de DADOS
-# (raw -> clean -> abt). Os parâmetros de modelagem ficam em Model/config.yml.
-#
-# REGRA DO PROJETO: nada de hardcoding. Caminhos são RELATIVOS à raiz do projeto
-# e montados com pathlib (portável Linux/macOS/Windows). Nunca fixar drive (C:\).
 # =============================================================================
 
 project:
@@ -25,7 +18,7 @@ paths:
 
 # --- Storage (MinIO / S3) — I/O do pipeline é toda aqui ----------------------
 # Nomes dos buckets. Endpoint e credenciais vêm de env (MINIO_ENDPOINT,
-# AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY), NUNCA deste arquivo.
+# AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
 storage:
   buckets:
     raw: raw
@@ -42,33 +35,8 @@ data:
     bureau: bureau.csv
     previous_application: previous_application.csv
   clean_files:
-    application: application_train.parquet                # tabela principal limpa
+    application: application_train.parquet           
     bureau: bureau.parquet                      
     previous_application: previous_application.parquet
-  abt_files: 
-    train: abt_train.parquet                              
-    val: val_data.parquet                                
-
-# --- Sanitização (raw -> clean) ---------------------------------------------
-sanitization:
-  null_threshold_pct: 50               # remove colunas com mais de X% de nulos
-  numeric_fill_strategy: median        # median | mean | zero
-  categorical_fill_value: Desconhecido
-  monetary_keyword: AMT                # colunas com "AMT" -> preenchidas com 0
-  feature_engineering:
-    days_birth_to_age: true            # cria IDADE_ANOS = abs(DAYS_BIRTH)/365
-
-# --- Construção da ABT (clean -> abt): 1 linha por SK_ID_CURR ----------------
-abt:
-  aggregations:
-    bureau:
-      AMT_CREDIT_SUM: sum
-      AMT_CREDIT_SUM_DEBT: sum
-      DAYS_CREDIT: max
-    previous_application:
-      SK_ID_PREV: count
-  rename:
-    AMT_CREDIT_SUM: TOTAL_CREDIT_EXT
-    AMT_CREDIT_SUM_DEBT: TOTAL_DEBT
-    SK_ID_PREV: QTD_PREV_APPS
-  fill_missing_after_merge: 0          # clientes sem histórico recebem 0
+  abt_files:
+    abt: abt.parquet   
