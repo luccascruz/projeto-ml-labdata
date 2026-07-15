@@ -2,13 +2,15 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Agora o requirements.txt está no mesmo nível do contexto
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Build context é a raiz do projeto (definido em docker-compose.yml), então os
+# caminhos abaixo são relativos à raiz — Docker não permite COPY de fora do
+# build context (../../../ não funciona).
+COPY MLOps/docker/streamlit/requirements.txt .
+# --trusted-host: contorna falha de SSL em redes corporativas com inspecao
+# HTTPS (proxy/antivirus). Ver MLOps/README.md.
+RUN pip install --no-cache-dir --trusted-host pypi.org --trusted-host files.pythonhosted.org -r requirements.txt
 
-# Para copiar o restante do código da raiz, precisamos sair da pasta MLOps/docker/streamlit/
-# O Docker consegue subir níveis com ../
-COPY ../../../ . 
+COPY . .
 
 EXPOSE 8501
 

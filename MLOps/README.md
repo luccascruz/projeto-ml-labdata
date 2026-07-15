@@ -32,6 +32,16 @@ O pipeline acessa o MinIO via `storage.py` (raiz): monta URIs `s3://bucket/arqui
 e lê endpoint/credenciais de variáveis de ambiente. Os nomes dos buckets vêm do
 `config.yml` de cada domínio (`DataPipeline/` e `Model/`).
 
+## Nota: SSL corporativo no build
+
+Em redes corporativas com inspeção HTTPS (proxy/antivírus tipo Zscaler,
+Kaspersky, ESET), o `pip install` dentro dos containers pode falhar com
+`SSL: CERTIFICATE_VERIFY_FAILED` ao acessar o PyPI, porque o container não
+confia no certificado usado pela inspeção. Os Dockerfiles (`MLOps/docker/*`)
+já usam `--trusted-host pypi.org --trusted-host files.pythonhosted.org` como
+contorno. Se ainda assim falhar, tente construir fora da VPN/rede corporativa,
+ou instale o certificado raiz da sua rede na imagem base.
+
 ## Pré-requisitos
 
 - Docker Desktop / Docker Engine + Docker Compose.

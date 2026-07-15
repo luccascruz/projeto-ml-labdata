@@ -123,8 +123,8 @@ services:
   # ----------------------------------------------------------------- Streamlit
   streamlit-app:
     build:
-      context: ./MLOps/docker/streamlit  # Aponta para a pasta do Dockerfile
-      dockerfile: Dockerfile             # O Dockerfile está aqui dentro
+      context: .                                    # raiz do projeto (o Dockerfile faz COPY de código fora de MLOps/docker/streamlit)
+      dockerfile: MLOps/docker/streamlit/Dockerfile
     container_name: streamlit-app
     ports:
       - "8501:8501"

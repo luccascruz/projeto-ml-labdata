@@ -34,7 +34,9 @@ Os scripts **leem do config** (cada um do config do seu domínio) — **NESTE re
 - `/MLOps/pipeline_orchestration.py` — runner sequencial local (sanitize → build_abt → train) que espelha a DAG, útil para validar o fluxo sem subir o Airflow inteiro.
 - `/MLOps/README.md` — arquitetura desenhada (diagrama + tabela de componentes) e proposta de **monitoramento** (performance batch via ROC AUC/KS/precisão-recall-F1 ao maturar o rótulo, drift via PSI, falhas operacionais) e de **ações automatizadas com agente de IA** (decisão automática por faixa de score, agente de explicabilidade/próxima ação, re-treino disparado por drift) — desenho completo, implementação de referência ainda pendente para o DAG de drift e o agente.
 
-**Pendências conhecidas** (a tratar se sobrar tempo, não bloqueiam a entrega): a avaliação (`evaluation.ipynb`) ainda roda sobre a base inteira, não sobre um conjunto de teste *held-out* (embora `Model/config.yml` já defina `split.test_size`/`split.val_size`); a imputação em `data_sanitization.py` é feita antes do split treino/teste (risco de vazamento — dúvida em aberto com a professora, ver abaixo); DAG de drift/monitoramento e o agente de justificativa ainda são desenho, não código.
+**Vazamento treino/teste — resolvido nesta branch:** a dúvida do Lucas em aberto com a professora ("como separar treino/teste evitando vazamento") foi endereçada — o split (`train_test_split` estratificado, treino/validação/teste) e a imputação por mediana saíram do `abt_transform.py` (que agora só grava a ABT crua, uma linha por empréstimo, sem split) e foram para dentro de `Model/train.py::prepare_model_data`. A mediana é calculada **somente no treino** (pós-split) e aplicada em validação/teste — sem vazamento de informação entre splits. `data_sanitization.py` não faz mais nenhuma imputação. `Model/config.yml` define as proporções em `split.test_size`/`split.val_size`.
+
+**Pendências conhecidas** (a tratar se sobrar tempo, não bloqueiam a entrega): a avaliação (`evaluation.ipynb`) ainda precisa ser conferida para rodar sobre o `X_test`/`y_test` held-out salvo pelo `train.py` (`evaluation_data/X_test.pkl`), e não sobre a base inteira; DAG de drift/monitoramento e o agente de justificativa ainda são desenho, não código.
 
 **Monitoramento — qual métrica acompanhar (a definir/implementar):** decidir a métrica de acompanhamento em vez de assumir acurácia por padrão. Como a `TARGET` é muito desbalanceada (~8% de inadimplência), a **acurácia engana**: um modelo que nunca prevê inadimplência já "acerta" ~92% e ainda assim é inútil. Priorizar então **ROC AUC** (métrica oficial) e **KS**, mais **precisão/recall/F1 da classe inadimplente**, comparando **predito × valor real** conforme os rótulos reais (pagou/não pagou) forem chegando — como o desfecho do empréstimo tem defasagem, o monitoramento *online* se apoia também em *drift* do score e das features (ex.: PSI) até os rótulos maturarem. Além da métrica técnica, definir uma **variável/KPI de negócio** para julgar se o modelo é "bom" na ótica da empresa (ex.: taxa de inadimplência da carteira aprovada pelo modelo, perda esperada evitada, ganho por decisão) — coerente com o princípio **"o modelo é o meio, não o fim"**.
 
@@ -146,8 +148,9 @@ Compilado das exigências e conselhos da professora para o sucesso nas etapas em
 O grupo dividiu as frentes de trabalho da etapa individual/deploy assim. Cada integrante mantém o **seu próprio repositório** (regra do brief), mas as tarefas abaixo mostram quem está puxando cada parte da solução compartilhada.
 
 **Dúvidas em aberto (a esclarecer com a professora):**
-- Como separar corretamente base de treino e teste — evitando vazamento (imputação/`fit` só no treino). *(Lucas)*
 - Onde exatamente a análise exploratória deve ser feita (dado bruto vs. dado limpo / ABT). *(Alex)*
+
+> A dúvida do Lucas sobre separação treino/teste sem vazamento já foi resolvida nesta branch — ver "Vazamento treino/teste — resolvido nesta branch" acima.
 
 **Frentes por integrante:**
 - **Alex** — script de análise exploratória sobre os dados brutos **e** sobre a ABT (para orientar o treino) + `Model/predict.py` para uso no teste do FastAPI.
