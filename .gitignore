@@ -227,3 +227,7 @@ __marimo__/
 
 # Docs internos do fluxo de brainstorming (nao versionar)
 docs/superpowers/
+CLAUDE.md
+
+# Logs do Airflow (gerados pelo container, montados em ./logs)
+logs/

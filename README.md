@@ -44,8 +44,11 @@ pip install -r requirements.txt
 ### 2. Dados
 
 Baixe a base do Kaggle (<https://www.kaggle.com/competitions/home-credit-default-risk/overview>)
-e coloque os CSVs **brutos** na pasta `Dados/`:
+e coloque os CSVs **brutos** na pasta `Dados/raw/`:
 `application_train.csv`, `bureau.csv`, `previous_application.csv`.
+
+O serviço `seeder` do Docker envia esses arquivos para o bucket `raw` do MinIO
+automaticamente ao subir o stack.
 
 ### 3. Pipeline (do dado bruto ao modelo)
 
@@ -85,11 +88,29 @@ Acesse o Airflow:
 Acesse o Streamlit:
 - Streamlit <http://localhost:8501>
 
-- O `seeder` carrega `Dados/*.csv` no bucket `raw`; dispare o DAG
-  `home_credit_pipeline` no Airflow. Detalhes em [MLOps/README.md](MLOps/README.md).
+- O `seeder` carrega `Dados/raw/*.csv` no bucket `raw`; dispare o DAG
+  `home-credit-pipeline` no Airflow. Detalhes em [MLOps/README.md](MLOps/README.md).
 
 - **obs**: Se der erro de permission 403, execute este código:
 `docker compose exec airflow-scheduler chmod -R 777 /opt/airflow/logs`
+
+## Serviço de predição (Streamlit)
+
+Depois que o DAG `home-credit-pipeline` concluir (o modelo precisa existir no
+bucket `models`), acesse <http://localhost:8501>. O serviço:
+
+1. aplica as **regras de negócio** (idade, comprometimento de renda) — parâmetros
+   em `Model/config.yml`, bloco `inference`;
+2. carrega o **modelo campeão** (topo do `leaderboard.csv`) do MinIO;
+3. devolve a probabilidade de inadimplência e a **ação automática**:
+   APROVAR / NEGAR / ANÁLISE HUMANA (zona cinzenta em torno do threshold).
+
+Disparar o pipeline / o monitoramento pela linha de comando:
+
+```bash
+docker compose exec airflow-scheduler airflow dags trigger home-credit-pipeline
+docker compose exec airflow-scheduler airflow dags trigger home-credit-monitoring
+```
 
 
 ### COMANDOS NO DOCKER
@@ -106,8 +127,13 @@ docker compose build --no-cache
 docker compose logs -f streamlit-app
 
 ⚠️ **Observação** sobre Conflitos de Dependência (XGBoost)
-Durante o desenvolvimento do projeto, identificamos uma incompatibilidade crítica envolvendo a versão 3.3.0 do XGBoost. Esta versão, por ser muito recente, apresentou erros de serialização (Input stream corrupted) ao interagir com o joblib e versões legadas do ambiente.
-Execute o seguinte comando:
-```
-pip install xgboost==3.2.0
-```
+
+O erro de serialização (`Input stream corrupted`) do XGBoost com o `joblib`
+acontece quando o modelo é **gravado com uma versão e lido com outra** — não é
+um defeito da 3.3.0 em si. Por isso a versão é **pinada igual** (`xgboost==3.3.0`)
+no `requirements.txt` da raiz e nos requirements das imagens
+(`MLOps/docker/*/requirements.txt`): quem treina (Airflow) e quem lê o `.pkl`
+(Streamlit) usam a mesma versão.
+
+Se for rodar fora do Docker, instale exatamente o `requirements.txt` da raiz —
+não misture versões de XGBoost entre treino e inferência.

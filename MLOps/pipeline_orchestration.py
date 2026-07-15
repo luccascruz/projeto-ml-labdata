@@ -13,7 +13,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from DataPipeline.data_sanitization import run_sanitization
 from DataPipeline.abt_transform import build_abt
-from Model.train import train_model
+from Model.train import train_and_evaluate
 
 
 def main() -> None:
@@ -22,7 +22,7 @@ def main() -> None:
     print("== [2/3] build_abt ==")
     build_abt()
     print("== [3/3] train ==")
-    train_model()
+    train_and_evaluate()
     print("== pipeline concluido ==")
 
 

@@ -12,6 +12,7 @@ storage:
   buckets:
     abt: abt
     models: models
+    monitoring: monitoring
 
 # --- Entrada (onde o script busca a ABT no MinIO) ---------------------------
 # O script train.py usa abt_dir + abt_files
@@ -57,6 +58,22 @@ models:
       class_weight: balanced
       max_iter: 1000
 
+# --- Inferência (serviço de predição / Streamlit) ---------------------------
+# Regras de negócio aplicadas ANTES do modelo e parâmetros de mapeamento do
+# input do cliente para o espaço de features da ABT. Ficam aqui (e não
+# chumbados no app) para poder alterar ao vivo sem tocar no código.
+inference:
+  regras_negocio:
+    idade_minima: 18
+    idade_maxima: 65
+    max_credito_sobre_renda: 15   # crédito > 15x a renda anual => recusa direta
+  # A ABT usa AMT_INCOME_TOTAL/AMT_ANNUITY na escala ANUAL (base Kaggle).
+  # O formulário coleta valores MENSAIS, então convertemos na entrada.
+  meses_por_ano: 12
+  # Faixa cinzenta em torno do threshold: dentro dela a decisão não é
+  # automática, vai para análise humana (ver MLOps/README.md).
+  zona_cinzenta: 0.05
+
 # --- Pós-Processamento e Avaliação -----------------------------------------
 # O threshold é o corte para classificar como "1" (Inadimplente)
 # O train.py ajusta isso para garantir o min_recall_target
@@ -75,3 +92,24 @@ evaluation:
     - ks
     - confusion_matrix
     - pr_curve
+
+# --- Monitoramento em produção (Model/monitoring.py) ------------------------
+# Lido pelo DAG `home-credit-monitoring`. Alterar os limiares aqui muda o
+# comportamento do monitoramento sem tocar no código.
+monitoring:
+  relatorio: relatorio_monitoramento.csv
+  psi_buckets: 10            # nº de faixas (quantis) usadas no cálculo do PSI
+  psi_alerta: 0.20           # PSI > 0.2 = drift relevante (padrão de mercado)
+  roc_auc_minimo: 0.70       # abaixo disso o modelo é considerado degradado
+  features_monitoradas:      # variáveis críticas p/ o negócio (renda, crédito, dívida)
+    - AMT_INCOME_TOTAL
+    - AMT_CREDIT
+    - AMT_ANNUITY
+    - AGE
+    - EMPLOYMENT_YEARS
+    - CREDIT_INCOME_RATIO
+    - ANNUITY_INCOME_RATIO
+    - DTI_RATIO
+    - TOTAL_DEBT
+    - BUREAU_LOAN_COUNT
+    - EXT_SOURCE_MEAN
